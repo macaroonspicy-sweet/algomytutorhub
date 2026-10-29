@@ -11,7 +11,7 @@ import ExportDialog from '@/components/export/ExportDialog';
 import { toast } from 'sonner';
 import FeedbackFormDialog from '@/components/feedback/FeedbackFormDialog';
 import FeedbackPDFPreview from '@/components/feedback/FeedbackPDFPreview';
-import Pagination from '@/components/ui/Pagination';
+import Pagination from '@/components/ui/pagination';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 
 export default function StudentFeedback() {
