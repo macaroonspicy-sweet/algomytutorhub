@@ -7,7 +7,7 @@ import { Award, ChevronDown, ChevronUp, Download, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { generateQCEvaluationPDF, generateQCMonthlyPDF } from '@/lib/pdfGenerator';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
-import Pagination from '@/components/ui/Pagination';
+import Pagination from '@/components/ui/pagination';
 import { Filter } from 'lucide-react';
 
 const GRADE_OPTIONS = ['Excellent', 'Good', 'Fair', 'Needs Improvement', 'Critical'];
