@@ -1,0 +1,82 @@
+{
+  "name": "QCMonthlyEvaluation",
+  "type": "object",
+  "properties": {
+    "tutor_id": {
+      "type": "string",
+      "description": "ID of the Tutor"
+    },
+    "tutor_name": {
+      "type": "string",
+      "description": "Name of the Tutor"
+    },
+    "tutor_photo": {
+      "type": "string",
+      "description": "Photo URL of the tutor"
+    },
+    "period_month": {
+      "type": "number",
+      "description": "Month of the evaluation"
+    },
+    "period_year": {
+      "type": "number",
+      "description": "Year of the evaluation"
+    },
+    "record_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the monthly evaluation was generated"
+    },
+    "period_1_record_id": {
+      "type": "string",
+      "description": "ID of Periode 1 QC Record"
+    },
+    "period_2_record_id": {
+      "type": "string",
+      "description": "ID of Periode 2 QC Record"
+    },
+    "period_1_score": {
+      "type": "number",
+      "description": "Evaluation score for Periode 1"
+    },
+    "period_2_score": {
+      "type": "number",
+      "description": "Evaluation score for Periode 2"
+    },
+    "period_1_grade": {
+      "type": "string",
+      "description": "Grade for Periode 1"
+    },
+    "period_2_grade": {
+      "type": "string",
+      "description": "Grade for Periode 2"
+    },
+    "monthly_score": {
+      "type": "number",
+      "description": "Monthly score = floor((P1 + P2) / 2)"
+    },
+    "monthly_final_grade": {
+      "type": "string",
+      "enum": [
+        "Excellent",
+        "Good",
+        "Fair",
+        "Needs Improvement",
+        "Critical"
+      ],
+      "description": "Final monthly grade"
+    },
+    "monthly_aspect_scores": {
+      "type": "object",
+      "description": "Per-aspect scores: { aspectId: { p1, p2, avg } }"
+    },
+    "monthly_notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tutor_id",
+    "period_month",
+    "period_year"
+  ]
+}

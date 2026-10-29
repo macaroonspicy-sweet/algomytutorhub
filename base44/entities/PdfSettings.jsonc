@@ -1,0 +1,22 @@
+{
+  "name": "PdfSettings",
+  "type": "object",
+  "properties": {
+    "setting_key": {
+      "type": "string",
+      "description": "Setting key (e.g., 'background_image')"
+    },
+    "setting_value": {
+      "type": "string",
+      "description": "Setting value (e.g., image URL)"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether this setting is active"
+    }
+  },
+  "required": [
+    "setting_key"
+  ]
+}

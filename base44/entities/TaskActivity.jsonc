@@ -1,0 +1,52 @@
+{
+  "name": "TaskActivity",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "ID of the TutorTask"
+    },
+    "action": {
+      "type": "string",
+      "description": "created | assigned | reassigned | status_changed | deadline_changed | revision_requested | reopened | cancelled | comment"
+    },
+    "actor_id": {
+      "type": "string",
+      "description": "CustomUser ID of the actor"
+    },
+    "actor_name": {
+      "type": "string",
+      "description": "Name of the actor"
+    },
+    "actor_role": {
+      "type": "string",
+      "description": "Role of the actor"
+    },
+    "from_status": {
+      "type": "string",
+      "description": "Previous status"
+    },
+    "to_status": {
+      "type": "string",
+      "description": "New status"
+    },
+    "note": {
+      "type": "string",
+      "description": "Human readable detail of the change"
+    }
+  },
+  "required": [
+    "task_id",
+    "action"
+  ],
+  "rls": {
+    "read": {
+      "created_by_id": {
+        "$exists": true
+      }
+    },
+    "create": {},
+    "update": {},
+    "delete": {}
+  }
+}

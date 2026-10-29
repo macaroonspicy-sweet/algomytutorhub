@@ -1,0 +1,111 @@
+{
+  "name": "QCSubmission",
+  "type": "object",
+  "properties": {
+    "tutor_id": {
+      "type": "string",
+      "description": "CustomUser ID of the tutor who submitted"
+    },
+    "tutor_name": {
+      "type": "string",
+      "description": "Tutor name snapshot, taken from the tutor's own account"
+    },
+    "class_name": {
+      "type": "string",
+      "description": "Class the recording belongs to"
+    },
+    "recording_url": {
+      "type": "string",
+      "description": "Class recording or document URL"
+    },
+    "class_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of the class; the submission date is used when unavailable"
+    },
+    "submission_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the submission was made"
+    },
+    "submitted_at": {
+      "type": "string",
+      "description": "Timestamp of the submission"
+    },
+    "period": {
+      "type": "number",
+      "enum": [
+        1,
+        2
+      ],
+      "description": "1 = Period 1 (1-16), 2 = Period 2 (17-end of month)"
+    },
+    "period_month": {
+      "type": "number",
+      "description": "Month of the QC period"
+    },
+    "period_year": {
+      "type": "number",
+      "description": "Year of the QC period"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "submitted",
+        "superseded"
+      ],
+      "default": "submitted",
+      "description": "submitted = current version, superseded = replaced by a newer submission"
+    },
+    "version": {
+      "type": "number",
+      "default": 1,
+      "description": "Submission version for this tutor, class and period"
+    },
+    "superseded_at": {
+      "type": "string",
+      "description": "When this version was replaced"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "QC Submission task this entry completes"
+    },
+    "task_title": {
+      "type": "string",
+      "description": "Title snapshot of the linked task"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional notes from the tutor"
+    }
+  },
+  "required": [
+    "tutor_id",
+    "recording_url",
+    "period",
+    "period_month",
+    "period_year"
+  ],
+  "rls": {
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

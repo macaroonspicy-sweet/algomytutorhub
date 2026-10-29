@@ -1,0 +1,51 @@
+{
+  "name": "StudentPerformanceCategory",
+  "type": "object",
+  "properties": {
+    "aspect_title": {
+      "type": "string",
+      "description": "Title of the performance aspect"
+    },
+    "max_point": {
+      "type": "number",
+      "enum": [
+        3,
+        4,
+        5
+      ],
+      "default": 5,
+      "description": "Maximum point scale for this aspect (3, 4, or 5)"
+    },
+    "point_1_description": {
+      "type": "string",
+      "description": "Description for point 1 (lowest)"
+    },
+    "point_2_description": {
+      "type": "string",
+      "description": "Description for point 2"
+    },
+    "point_3_description": {
+      "type": "string",
+      "description": "Description for point 3"
+    },
+    "point_4_description": {
+      "type": "string",
+      "description": "Description for point 4"
+    },
+    "point_5_description": {
+      "type": "string",
+      "description": "Description for point 5 (highest)"
+    },
+    "order_index": {
+      "type": "number",
+      "description": "Display order"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "aspect_title"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "name": "Student",
+  "type": "object",
+  "properties": {
+    "student_name": {
+      "type": "string",
+      "description": "Full name of the student"
+    },
+    "student_code": {
+      "type": "string",
+      "description": "Student ID / code used for matching imports"
+    },
+    "course_name": {
+      "type": "string",
+      "description": "Course the student is enrolled in"
+    },
+    "class_code": {
+      "type": "string",
+      "description": "Class code"
+    },
+    "tutor_id": {
+      "type": "string",
+      "description": "Default tutor CustomUser ID"
+    },
+    "tutor_name": {
+      "type": "string",
+      "description": "Default tutor name"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional notes"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the student is active"
+    }
+  },
+  "required": [
+    "student_name"
+  ],
+  "rls": {
+    "read": {
+      "created_by_id": {
+        "$exists": true
+      }
+    },
+    "create": {},
+    "update": {},
+    "delete": {}
+  }
+}

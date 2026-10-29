@@ -1,0 +1,16 @@
+{
+  "name": "Referral",
+  "type": "object",
+  "properties": {
+    "notes": {
+      "type": "string",
+      "description": "Referral description (Rich Text)"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this referral is active (only 1 can be active at a time)"
+    }
+  },
+  "required": []
+}

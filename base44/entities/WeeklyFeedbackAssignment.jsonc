@@ -1,0 +1,104 @@
+{
+  "name": "WeeklyFeedbackAssignment",
+  "type": "object",
+  "properties": {
+    "week_start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Monday (or first day) of the feedback week"
+    },
+    "week_end_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Last day of the feedback week"
+    },
+    "week_key": {
+      "type": "string",
+      "description": "Normalized week identifier (equals week_start_date)"
+    },
+    "class_name": {
+      "type": "string",
+      "description": "Class the feedback was written for"
+    },
+    "class_code": {
+      "type": "string",
+      "description": "Class code used for matching imports"
+    },
+    "course_name": {
+      "type": "string",
+      "description": "Course the class belongs to"
+    },
+    "tutor_id": {
+      "type": "string",
+      "description": "ID of the assigned tutor (CustomUser)"
+    },
+    "tutor_name": {
+      "type": "string",
+      "description": "Tutor name snapshot"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "completed"
+      ],
+      "default": "pending",
+      "description": "Assignment status; overdue is derived from week_end_date"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Notes for the tutor"
+    },
+    "completed_at": {
+      "type": "string",
+      "description": "Timestamp when feedback was completed"
+    },
+    "completed_by_name": {
+      "type": "string",
+      "description": "Name of the user who completed it"
+    },
+    "created_by_name": {
+      "type": "string",
+      "description": "Name of the user who created the assignment"
+    },
+    "student_id": {
+      "type": "string",
+      "description": "Legacy: student this feedback was assigned to (historical records only)"
+    },
+    "student_name": {
+      "type": "string",
+      "description": "Legacy: student name snapshot (historical records only)"
+    },
+    "student_code": {
+      "type": "string",
+      "description": "Legacy: student code snapshot (historical records only)"
+    }
+  },
+  "required": [
+    "week_start_date",
+    "week_end_date",
+    "tutor_id"
+  ],
+  "rls": {
+    "read": {
+      "created_by_id": {
+        "$exists": true
+      }
+    },
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

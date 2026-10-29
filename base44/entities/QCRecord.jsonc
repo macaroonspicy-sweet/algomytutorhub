@@ -1,0 +1,101 @@
+{
+  "name": "QCRecord",
+  "type": "object",
+  "properties": {
+    "admin_qc_id": {
+      "type": "string",
+      "description": "ID of the Admin QC"
+    },
+    "admin_qc_name": {
+      "type": "string",
+      "description": "Name of the Admin QC"
+    },
+    "tutor_id": {
+      "type": "string",
+      "description": "ID of the Tutor"
+    },
+    "tutor_name": {
+      "type": "string",
+      "description": "Name of the Tutor"
+    },
+    "tutor_photo": {
+      "type": "string",
+      "description": "Photo URL of the tutor"
+    },
+    "tutor_telegram": {
+      "type": "string",
+      "description": "Tutor telegram account"
+    },
+    "period": {
+      "type": "number",
+      "enum": [
+        1,
+        2
+      ],
+      "description": "1 = Periode 1 (1-15), 2 = Periode 2 (16-31)"
+    },
+    "period_month": {
+      "type": "number",
+      "description": "Month of the assessment period"
+    },
+    "period_year": {
+      "type": "number",
+      "description": "Year of the assessment period"
+    },
+    "record_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the QC record was created"
+    },
+    "aspect_scores": {
+      "type": "object",
+      "description": "Object with aspect_name as key and { point: number, description: string } as value"
+    },
+    "evaluation_score": {
+      "type": "number",
+      "description": "Calculated total score (0-100)"
+    },
+    "final_grade": {
+      "type": "string",
+      "enum": [
+        "Excellent",
+        "Good",
+        "Fair",
+        "Needs Improvement",
+        "Critical"
+      ],
+      "description": "Final grade based on evaluation score"
+    },
+    "auto_generated_notes": {
+      "type": "string",
+      "description": "Auto-generated notes based on aspect scores"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional manual notes"
+    },
+    "star_rating": {
+      "type": "number",
+      "description": "Legacy star rating"
+    },
+    "qc_assessments": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Legacy assessment items"
+    },
+    "manual_assessments": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Legacy manual assessments"
+    }
+  },
+  "required": [
+    "tutor_id",
+    "period_month",
+    "period_year"
+  ]
+}

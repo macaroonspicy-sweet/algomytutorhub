@@ -1,0 +1,142 @@
+{
+  "name": "TutorTask",
+  "type": "object",
+  "properties": {
+    "group_id": {
+      "type": "string",
+      "description": "Groups tasks created together for multiple tutors"
+    },
+    "title": {
+      "type": "string",
+      "description": "Task title"
+    },
+    "description": {
+      "type": "string",
+      "description": "Task instructions"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "Student Feedback",
+        "QC Submission",
+        "Administration",
+        "Class Preparation",
+        "Training",
+        "Student Follow-up",
+        "Other"
+      ],
+      "default": "Other",
+      "description": "Task category"
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "Low",
+        "Medium",
+        "High",
+        "Urgent"
+      ],
+      "default": "Medium",
+      "description": "Task priority"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the tutor should start"
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date",
+      "description": "Task deadline"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed",
+        "need_assistance",
+        "cancelled"
+      ],
+      "default": "pending",
+      "description": "Task status"
+    },
+    "assigned_tutor_id": {
+      "type": "string",
+      "description": "CustomUser ID of the assigned tutor"
+    },
+    "assigned_tutor_name": {
+      "type": "string",
+      "description": "Name of the assigned tutor"
+    },
+    "assigned_by_id": {
+      "type": "string",
+      "description": "CustomUser ID of the Team Leader"
+    },
+    "assigned_by_name": {
+      "type": "string",
+      "description": "Name of the Team Leader"
+    },
+    "progress_notes": {
+      "type": "string",
+      "description": "Tutor progress notes"
+    },
+    "completion_notes": {
+      "type": "string",
+      "description": "Tutor notes on completion"
+    },
+    "revision_note": {
+      "type": "string",
+      "description": "Latest revision request from the Team Leader"
+    },
+    "revision_requested": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether a revision was requested"
+    },
+    "completed_at": {
+      "type": "string",
+      "description": "Completion timestamp"
+    },
+    "linked_week_start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Linked feedback week start (when the task is about weekly feedback)"
+    },
+    "linked_week_end_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Linked feedback week end"
+    },
+    "linked_class_name": {
+      "type": "string",
+      "description": "Class the task refers to (used by QC Submission tasks)"
+    }
+  },
+  "required": [
+    "title",
+    "assigned_tutor_id"
+  ],
+  "rls": {
+    "read": {
+      "created_by_id": {
+        "$exists": true
+      }
+    },
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

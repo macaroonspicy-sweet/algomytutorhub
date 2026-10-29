@@ -1,0 +1,45 @@
+{
+  "name": "Notification",
+  "type": "object",
+  "properties": {
+    "recipient_id": {
+      "type": "string",
+      "description": "ID of the CustomUser who receives this notification"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "qc_created",
+        "feedback_created",
+        "task_assigned",
+        "task_updated",
+        "task_status",
+        "weekly_feedback"
+      ],
+      "description": "Type of notification"
+    },
+    "title": {
+      "type": "string",
+      "description": "Notification title"
+    },
+    "message": {
+      "type": "string",
+      "description": "Notification message body"
+    },
+    "reference_id": {
+      "type": "string",
+      "description": "ID of the related record"
+    },
+    "is_read": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the notification has been read"
+    }
+  },
+  "required": [
+    "recipient_id",
+    "type",
+    "title",
+    "message"
+  ]
+}

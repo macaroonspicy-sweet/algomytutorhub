@@ -1,0 +1,21 @@
+{
+  "name": "FeedbackCategory",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Feedback assessment item name"
+    },
+    "description": {
+      "type": "string",
+      "description": "Feedback item description"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "name"
+  ]
+}

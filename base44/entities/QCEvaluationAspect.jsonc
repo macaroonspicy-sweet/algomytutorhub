@@ -1,0 +1,42 @@
+{
+  "name": "QCEvaluationAspect",
+  "type": "object",
+  "properties": {
+    "aspect_name": {
+      "type": "string",
+      "description": "Name of the evaluation aspect"
+    },
+    "weight_percentage": {
+      "type": "number",
+      "description": "Weight of this aspect in percentage (0-100)"
+    },
+    "order_index": {
+      "type": "number",
+      "description": "Display order"
+    },
+    "score_1_description": {
+      "type": "string",
+      "description": "Description for score 1"
+    },
+    "score_2_description": {
+      "type": "string",
+      "description": "Description for score 2"
+    },
+    "score_3_description": {
+      "type": "string",
+      "description": "Description for score 3"
+    },
+    "score_4_description": {
+      "type": "string",
+      "description": "Description for score 4"
+    },
+    "score_5_description": {
+      "type": "string",
+      "description": "Description for score 5"
+    }
+  },
+  "required": [
+    "aspect_name",
+    "weight_percentage"
+  ]
+}

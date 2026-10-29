@@ -1,0 +1,45 @@
+{
+  "name": "ModuleCategory",
+  "type": "object",
+  "properties": {
+    "course_category_id": {
+      "type": "string",
+      "description": "ID of the linked CourseCategory"
+    },
+    "course_name": {
+      "type": "string",
+      "description": "Name of the course (denormalized for display)"
+    },
+    "month": {
+      "type": "number",
+      "description": "Month number (1-10)"
+    },
+    "current_lesson": {
+      "type": "number",
+      "description": "Current lesson number within the month"
+    },
+    "lesson_number": {
+      "type": "number",
+      "description": "Lesson number"
+    },
+    "module_topic": {
+      "type": "string",
+      "description": "Module topic"
+    },
+    "key_result": {
+      "type": "string",
+      "description": "Key result of the module"
+    },
+    "new_skills": {
+      "type": "string",
+      "description": "New skills learned"
+    },
+    "order_index": {
+      "type": "number",
+      "description": "Display order for drag and drop sorting"
+    }
+  },
+  "required": [
+    "course_category_id"
+  ]
+}

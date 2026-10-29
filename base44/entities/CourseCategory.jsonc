@@ -1,0 +1,21 @@
+{
+  "name": "CourseCategory",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Course name"
+    },
+    "description": {
+      "type": "string",
+      "description": "Course description"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "name"
+  ]
+}
