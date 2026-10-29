@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Download, Loader2, RefreshCw, Award, FileText, Save, Eye, Search, X, Trash2, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { generateQCMonthlyPDF, previewQCMonthlyPDF } from '@/lib/pdfGenerator';
-import Pagination from '@/components/ui/Pagination';
+import Pagination from '@/components/ui/pagination';
 import PDFPreviewDialog from '@/components/qc/PDFPreviewDialog';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 import TelegramSendDialog from '@/components/qc/TelegramSendDialog';
