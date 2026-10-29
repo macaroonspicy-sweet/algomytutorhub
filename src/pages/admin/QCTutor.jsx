@@ -11,7 +11,7 @@ import { generateQCEvaluationPDF } from '@/lib/pdfGenerator';
 import QCRecordCard from '@/components/qc/QCRecordCard';
 import QCEvalFormDialog from '@/components/qc/QCEvalFormDialog';
 import TelegramSendDialog from '@/components/qc/TelegramSendDialog';
-import Pagination from '@/components/ui/Pagination';
+import Pagination from '@/components/ui/pagination';
 import { toast } from 'sonner';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 

@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import TaskFormDialog from '@/components/tasks/TaskFormDialog';
 import TaskDetailDialog from '@/components/tasks/TaskDetailDialog';
 import ExportDialog from '@/components/export/ExportDialog';
-import Pagination from '@/components/ui/Pagination';
+import Pagination from '@/components/ui/pagination';
 import { daysUntil, fmtDate, isTaskOverdue, PRIORITY_META, TASK_CATEGORIES, TASK_PRIORITIES, TASK_STATUS_META } from '@/lib/workflowUtils';
 import { invokeService } from '@/lib/appApi';
 
