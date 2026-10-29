@@ -13,7 +13,7 @@ import ImportWeeklyFeedbackDialog from '@/components/weekly-feedback/ImportWeekl
 import WeeklyFeedbackStats from '@/components/weekly-feedback/WeeklyFeedbackStats';
 import ExportDialog from '@/components/export/ExportDialog';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
-import Pagination from '@/components/ui/Pagination';
+import Pagination from '@/components/ui/pagination';
 import { downloadBase64File } from '@/lib/exportUtils';
 import { assignmentStatus, fmtDate, FEEDBACK_STATUS_META, weekBounds } from '@/lib/workflowUtils';
 import { invokeService } from '@/lib/appApi';
