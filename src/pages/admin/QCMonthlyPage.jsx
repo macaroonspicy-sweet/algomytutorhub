@@ -9,10 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Download, Loader2, RefreshCw, Award, FileText, Save, Eye, Search, X, Trash2, Send } from 'lucide-react';
+import { Download, Loader2, RefreshCw, Award, FileText, Save, Eye, Search, X, Trash2, Send, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { generateQCMonthlyPDF, previewQCMonthlyPDF } from '@/lib/pdfGenerator';
-import Pagination from '@/components/ui/pagination';
 import PDFPreviewDialog from '@/components/qc/PDFPreviewDialog';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 import TelegramSendDialog from '@/components/qc/TelegramSendDialog';
@@ -46,12 +45,12 @@ export default function QCMonthlyPage() {
   const [searchTutor, setSearchTutor] = useState('');
   const [filterGrade, setFilterGrade] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const ITEMS_PER_PAGE = 12;
+  const ITEMS_PER_PAGE = 10; // 10 data per halaman
   const [generating, setGenerating] = useState({});
-  const [notesDialog, setNotesDialog] = useState(null); // { monthly, tutor }
+  const [notesDialog, setNotesDialog] = useState(null);
   const [notesInput, setNotesInput] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
-  const [previewDialog, setPreviewDialog] = useState(null); // { monthly, title }
+  const [previewDialog, setPreviewDialog] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -68,8 +67,13 @@ export default function QCMonthlyPage() {
       db.entities.QCMonthlyEvaluation.filter({ period_month: filterMonth, period_year: filterYear }),
       db.entities.CustomUser.list(),
     ]);
-    setRecords(recs);
-    setMonthlyEvals(evals);
+
+    // Sorting Descending untuk memastikan data terbaru di posisi pertama
+    const sortedRecs = [...(recs || [])].sort((a, b) => new Date(b.created_date || b.record_date || 0) - new Date(a.created_date || a.record_date || 0));
+    const sortedEvals = [...(evals || [])].sort((a, b) => new Date(b.created_date || b.record_date || 0) - new Date(a.created_date || a.record_date || 0));
+
+    setRecords(sortedRecs);
+    setMonthlyEvals(sortedEvals);
     setTutors(users.filter(u => u.role === 'Tutor' || u.role === 'Team Leader'));
   };
 
@@ -226,16 +230,30 @@ export default function QCMonthlyPage() {
     return true;
   });
 
-  // Calculate pagination
-  const totalPages = Math.ceil(activeTutors.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(activeTutors.length / ITEMS_PER_PAGE) || 1;
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const paginatedTutors = activeTutors.slice(startIndex, endIndex);
 
-  // Reset page when filters change
   React.useEffect(() => {
     setCurrentPage(1);
   }, [searchTutor, filterGrade, filterMonth, filterYear]);
+
+  const getPageNumbers = () => {
+    const pages = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 3) {
+        pages.push(1, 2, 3, 4, 5, '...', totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+      } else {
+        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+      }
+    }
+    return pages;
+  };
 
   return (
     <div className="space-y-6">
@@ -260,7 +278,6 @@ export default function QCMonthlyPage() {
         </div>
       </div>
 
-      {/* Search & Grade Filter */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -417,12 +434,70 @@ export default function QCMonthlyPage() {
           })}
         </div>
 
+        {/* PURPLE STYLED PAGINATION UI */}
         {totalPages > 1 && (
-          <Pagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={setCurrentPage}
-          />
+          <div className="flex items-center justify-center gap-1.5 py-6">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+            >
+              <ChevronsLeft className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+              disabled={currentPage === 1}
+              className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            {getPageNumbers().map((page, idx) => {
+              if (page === '...') {
+                return (
+                  <span key={`dots-${idx}`} className="px-2 text-sm text-muted-foreground select-none">
+                    ...
+                  </span>
+                );
+              }
+              const isActive = page === currentPage;
+              return (
+                <Button
+                  key={page}
+                  variant={isActive ? 'default' : 'outline'}
+                  onClick={() => setCurrentPage(page)}
+                  className={`w-9 h-9 rounded-xl text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-purple-600 hover:bg-purple-700 text-white font-semibold border-purple-600 shadow-md shadow-purple-900/30'
+                      : 'border-border bg-card hover:bg-secondary text-foreground/80'
+                  }`}
+                >
+                  {page}
+                </Button>
+              );
+            })}
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+            >
+              <ChevronsRight className="w-4 h-4" />
+            </Button>
+          </div>
         )}
       </>
       )}
@@ -432,7 +507,7 @@ export default function QCMonthlyPage() {
           Showing {startIndex + 1} to {Math.min(endIndex, activeTutors.length)} of {activeTutors.length} tutors
         </div>
       )}
-      {/* PDF Preview Dialog */}
+
       <PDFPreviewDialog
         open={!!previewDialog}
         onOpenChange={(open) => { if (!open) handleClosePreview(); }}
@@ -462,7 +537,6 @@ export default function QCMonthlyPage() {
         onSendingChange={(s) => { if (tgTarget) setSendingTg(prev => ({ ...prev, [tgTarget.monthly.id]: s })); }}
       />
 
-      {/* Notes Dialog */}
       <Dialog open={!!notesDialog} onOpenChange={() => setNotesDialog(null)}>
         <DialogContent className="bg-card border-border max-w-md">
           <DialogHeader>

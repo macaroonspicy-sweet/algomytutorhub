@@ -6,12 +6,11 @@ import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Filter, X } from 'lucide-react';
+import { Plus, Search, Filter, X, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from 'lucide-react';
 import { generateQCEvaluationPDF } from '@/lib/pdfGenerator';
 import QCRecordCard from '@/components/qc/QCRecordCard';
 import QCEvalFormDialog from '@/components/qc/QCEvalFormDialog';
 import TelegramSendDialog from '@/components/qc/TelegramSendDialog';
-import Pagination from '@/components/ui/pagination';
 import { toast } from 'sonner';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 
@@ -37,7 +36,7 @@ export default function QCTutor() {
   const [currentPage, setCurrentPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [tgTarget, setTgTarget] = useState(null);
-  const ITEMS_PER_PAGE = 12;
+  const ITEMS_PER_PAGE = 10; // 10 data per halaman
 
   useEffect(() => { loadData(); }, []);
 
@@ -46,7 +45,11 @@ export default function QCTutor() {
       db.entities.QCRecord.list('-created_date'),
       db.entities.CustomUser.list(),
     ]);
-    setRecords(recs);
+
+    // Sorting Descending untuk memastikan data terbaru selalu berada di posisi pertama
+    const sortedRecs = [...(recs || [])].sort((a, b) => new Date(b.created_date || b.record_date || 0) - new Date(a.created_date || a.record_date || 0));
+
+    setRecords(sortedRecs);
     setAdmins(users.filter(u => u.role !== 'Tutor'));
     setTutors(users.filter(u => u.role === 'Tutor' || u.role === 'Team Leader'));
   };
@@ -82,26 +85,43 @@ export default function QCTutor() {
 
   const years = [...new Set(records.map(r => r.period_year))].filter(Boolean).sort((a,b) => b-a);
   const hasFilters = search || filterPeriod !== 'all' || filterMonth !== 'all' || filterYear !== 'all' || filterGrade !== 'all' || filterMyOnly;
-  const filtered = records.filter(r => {
-    const matchSearch = !search || r.tutor_name?.toLowerCase().includes(search.toLowerCase()) || r.admin_qc_name?.toLowerCase().includes(search.toLowerCase());
-    const matchPeriod = filterPeriod === 'all' || String(r.period) === filterPeriod;
-    const matchMonth = filterMonth === 'all' || String(r.period_month) === filterMonth;
-    const matchYear = filterYear === 'all' || String(r.period_year) === filterYear;
-    const matchGrade = filterGrade === 'all' || r.final_grade === filterGrade;
-    const matchMyOnly = !filterMyOnly || r.tutor_id === currentUser.id;
-    return matchSearch && matchPeriod && matchMonth && matchYear && matchGrade && matchMyOnly;
-  });
+  
+  const filtered = records
+    .filter(r => {
+      const matchSearch = !search || r.tutor_name?.toLowerCase().includes(search.toLowerCase()) || r.admin_qc_name?.toLowerCase().includes(search.toLowerCase());
+      const matchPeriod = filterPeriod === 'all' || String(r.period) === filterPeriod;
+      const matchMonth = filterMonth === 'all' || String(r.period_month) === filterMonth;
+      const matchYear = filterYear === 'all' || String(r.period_year) === filterYear;
+      const matchGrade = filterGrade === 'all' || r.final_grade === filterGrade;
+      const matchMyOnly = !filterMyOnly || r.tutor_id === currentUser.id;
+      return matchSearch && matchPeriod && matchMonth && matchYear && matchGrade && matchMyOnly;
+    })
+    .sort((a, b) => new Date(b.created_date || b.record_date || 0) - new Date(a.created_date || a.record_date || 0));
 
-  // Calculate pagination
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE) || 1;
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const paginatedFiltered = filtered.slice(startIndex, endIndex);
 
-  // Reset page when filters change
   React.useEffect(() => {
     setCurrentPage(1);
   }, [search, filterPeriod, filterMonth, filterYear, filterGrade, filterMyOnly]);
+
+  const getPageNumbers = () => {
+    const pages = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 3) {
+        pages.push(1, 2, 3, 4, 5, '...', totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+      } else {
+        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+      }
+    }
+    return pages;
+  };
 
   return (
     <div className="space-y-6">
@@ -115,7 +135,6 @@ export default function QCTutor() {
         </Button>
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -176,7 +195,7 @@ export default function QCTutor() {
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
         {paginatedFiltered.map(r => (
           <QCRecordCard
-            key={r.id}
+            key={r.id || r.created_date}
             record={r}
             onEdit={(r) => { setEditing(r); setOpen(true); }}
             onDelete={handleDelete}
@@ -193,12 +212,70 @@ export default function QCTutor() {
         )}
       </div>
 
+      {/* PURPLE STYLED PAGINATION UI */}
       {totalPages > 1 && (
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-        />
+        <div className="flex items-center justify-center gap-1.5 py-6">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setCurrentPage(1)}
+            disabled={currentPage === 1}
+            className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+          >
+            <ChevronsLeft className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+            disabled={currentPage === 1}
+            className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+          {getPageNumbers().map((page, idx) => {
+            if (page === '...') {
+              return (
+                <span key={`dots-${idx}`} className="px-2 text-sm text-muted-foreground select-none">
+                  ...
+                </span>
+              );
+            }
+            const isActive = page === currentPage;
+            return (
+              <Button
+                key={page}
+                variant={isActive ? 'default' : 'outline'}
+                onClick={() => setCurrentPage(page)}
+                className={`w-9 h-9 rounded-xl text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-600 hover:bg-purple-700 text-white font-semibold border-purple-600 shadow-md shadow-purple-900/30'
+                    : 'border-border bg-card hover:bg-secondary text-foreground/80'
+                }`}
+              >
+                {page}
+              </Button>
+            );
+          })}
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+            disabled={currentPage === totalPages}
+            className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setCurrentPage(totalPages)}
+            disabled={currentPage === totalPages}
+            className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+          >
+            <ChevronsRight className="w-4 h-4" />
+          </Button>
+        </div>
       )}
 
       <QCEvalFormDialog

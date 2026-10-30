@@ -1,102 +1,98 @@
-import * as React from "react"
-import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react"
+import React from 'react';
+import { Button } from '@/components/ui/button';
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from 'lucide-react';
 
-import { cn } from "@/lib/utils"
-import { buttonVariants } from "@/components/ui/button";
+export default function PaginationControl({ currentPage, totalPages, onPageChange }) {
+  if (totalPages <= 1) return null;
 
-const Pagination = ({
-  className,
-  ...props
-}) => (
-  <nav
-    role="navigation"
-    aria-label="pagination"
-    className={cn("mx-auto flex w-full justify-center", className)}
-    {...props} />
-)
-Pagination.displayName = "Pagination"
+  const getPageNumbers = () => {
+    const pages = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 3) {
+        pages.push(1, 2, 3, 4, 5, '...', totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+      } else {
+        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+      }
+    }
+    return pages;
+  };
 
-const PaginationContent = React.forwardRef(({ className, ...props }, ref) => (
-  <ul
-    ref={ref}
-    className={cn("flex flex-row items-center gap-1", className)}
-    {...props} />
-))
-PaginationContent.displayName = "PaginationContent"
+  return (
+    <div className="flex items-center justify-center gap-1.5 py-6">
+      {/* First Page (<<) */}
+      <Button
+        variant="outline"
+        size="icon"
+        onClick={() => onPageChange(1)}
+        disabled={currentPage === 1}
+        className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+      >
+        <ChevronsLeft className="w-4 h-4" />
+      </Button>
 
-const PaginationItem = React.forwardRef(({ className, ...props }, ref) => (
-  <li ref={ref} className={cn("", className)} {...props} />
-))
-PaginationItem.displayName = "PaginationItem"
+      {/* Previous (<) */}
+      <Button
+        variant="outline"
+        size="icon"
+        onClick={() => onPageChange(Math.max(currentPage - 1, 1))}
+        disabled={currentPage === 1}
+        className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+      >
+        <ChevronLeft className="w-4 h-4" />
+      </Button>
 
-const PaginationLink = ({
-  className,
-  isActive,
-  size = "icon",
-  ...props
-}) => (
-  <a
-    aria-current={isActive ? "page" : undefined}
-    className={cn(buttonVariants({
-      variant: isActive ? "outline" : "ghost",
-      size,
-    }), className)}
-    {...props} />
-)
-PaginationLink.displayName = "PaginationLink"
+      {/* Angka Halaman & Ellipsis (...) */}
+      {getPageNumbers().map((page, idx) => {
+        if (page === '...') {
+          return (
+            <span key={`dots-${idx}`} className="px-2 text-sm text-muted-foreground select-none">
+              ...
+            </span>
+          );
+        }
 
-const PaginationPrevious = ({
-  className,
-  ...props
-}) => (
-  <PaginationLink
-    aria-label="Go to previous page"
-    size="default"
-    className={cn("gap-1 pl-2.5", className)}
-    {...props}>
-    <ChevronLeft className="h-4 w-4" />
-    <span>Previous</span>
-  </PaginationLink>
-)
-PaginationPrevious.displayName = "PaginationPrevious"
+        const isActive = page === currentPage;
+        return (
+          <Button
+            key={page}
+            variant={isActive ? 'default' : 'outline'}
+            onClick={() => onPageChange(page)}
+            className={`w-9 h-9 rounded-xl text-sm font-medium transition-colors ${
+              isActive
+                ? 'bg-purple-600 hover:bg-purple-700 text-white font-semibold border-purple-600 shadow-md shadow-purple-900/30'
+                : 'border-border bg-card hover:bg-secondary text-foreground/80'
+            }`}
+          >
+            {page}
+          </Button>
+        );
+      })}
 
-const PaginationNext = ({
-  className,
-  ...props
-}) => (
-  <PaginationLink
-    aria-label="Go to next page"
-    size="default"
-    className={cn("gap-1 pr-2.5", className)}
-    {...props}>
-    <span>Next</span>
-    <ChevronRight className="h-4 w-4" />
-  </PaginationLink>
-)
-PaginationNext.displayName = "PaginationNext"
+      {/* Next (>) */}
+      <Button
+        variant="outline"
+        size="icon"
+        onClick={() => onPageChange(Math.min(currentPage + 1, totalPages))}
+        disabled={currentPage === totalPages}
+        className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+      >
+        <ChevronRight className="w-4 h-4" />
+      </Button>
 
-const PaginationEllipsis = ({
-  className,
-  ...props
-}) => (
-  <span
-    aria-hidden
-    className={cn("flex h-9 w-9 items-center justify-center", className)}
-    {...props}>
-    <MoreHorizontal className="h-4 w-4" />
-    <span className="sr-only">More pages</span>
-  </span>
-)
-PaginationEllipsis.displayName = "PaginationEllipsis"
-
-export {
-  Pagination,
-  PaginationContent,
-  PaginationLink,
-  PaginationItem,
-  PaginationPrevious,
-  PaginationNext,
-  PaginationEllipsis,
+      {/* Last Page (>>) */}
+      <Button
+        variant="outline"
+        size="icon"
+        onClick={() => onPageChange(totalPages)}
+        disabled={currentPage === totalPages}
+        className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+      >
+        <ChevronsRight className="w-4 h-4" />
+      </Button>
+    </div>
+  );
 }
-
-export default Pagination;
