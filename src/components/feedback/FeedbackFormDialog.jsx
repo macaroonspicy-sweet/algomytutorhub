@@ -67,16 +67,22 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
     if (open) {
       if (editing) {
         const norm = { ...EMPTY_FORM, ...editing };
-        // Normalize legacy ID-based course_category_id to the course name
         if (norm.course_name && norm.course_category_id !== norm.course_name) {
           norm.course_category_id = norm.course_name;
         }
         setForm(norm);
       } else {
-        setForm(EMPTY_FORM);
+        // Otomatis isi data tutor dari pengguna yang sedang login saat membuat form baru
+        setForm({
+          ...EMPTY_FORM,
+          tutor_id: currentUser?.id || '',
+          tutor_name: currentUser?.full_name || '',
+          tutor_photo: currentUser?.photo_url || '',
+          tutor_telegram: currentUser?.telegram_account || '',
+        });
       }
     }
-  }, [open, editing]);
+  }, [open, editing, currentUser]);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
@@ -131,10 +137,9 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
 
   const handleSave = async () => {
     setSaving(true);
-    // Parse record_date to month/year for filtering
     const dateParts = (form.record_date || TODAY).split('-');
     const studentName = form.student_name || 'Student';
-    // Bake the student name into the performance description (replaces "(Student Name)" placeholder)
+
     const bakePerf = (val) => {
       if (!val || !val.includes('::')) return val;
       const parts = val.split('::');
@@ -146,6 +151,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
       const baked = template.replace(/\(Student Name\)/gi, studentName).replace(/\[Student Name\]/gi, studentName);
       return `${aspect.aspect_title}::${pointNum}::${baked}`;
     };
+
     const saveForm = {
       ...form,
       presence: bakePerf(form.presence),
@@ -158,12 +164,12 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
         created_by_role: currentUser?.role || '',
       }),
     };
+
     if (editing) {
       await db.entities.FeedbackRecord.update(editing.id, saveForm);
     } else {
       const created = await db.entities.FeedbackRecord.create(saveForm);
       if (currentUser?.role === 'Tutor' || currentUser?.role === 'Team Leader') {
-        // Tutor / Team Leader submitted feedback → notify admin roles
         const admins = await db.entities.CustomUser.filter({ is_active: true });
         const adminUsers = admins.filter(u => ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team'].includes(u.role));
         await Promise.all(adminUsers.map(admin =>
@@ -177,7 +183,6 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
           })
         ));
       } else if (saveForm.tutor_id) {
-        // Non-Tutor recorded feedback → notify ONLY the assigned tutor (not broadcast to all tutors)
         await db.entities.Notification.create({
           recipient_id: saveForm.tutor_id,
           type: 'feedback_created',
@@ -192,7 +197,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
     onSaved();
   };
 
-  const visibleTutors = currentUser?.role === 'Tutor' ? tutors.filter(t => t.id === currentUser.id) : tutors;
+  const isTutorRole = ['Tutor', 'Team Leader'].includes(currentUser?.role);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -242,14 +247,22 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
             <Input value={form.class_code} onChange={e => set('class_code', e.target.value)} placeholder="Enter class code..." className="bg-muted border-border" />
           </Field>
 
-          {/* Tutor Name */}
+          {/* Tutor Name (Otomatis Terisi & Dikunci untuk Role Tutor/Team Leader) */}
           <Field label="Tutor Name">
-            <Select value={form.tutor_id} onValueChange={handleTutorChange}>
-              <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select tutor..." /></SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {tutors.map(t => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {isTutorRole ? (
+              <Input
+                value={form.tutor_name || currentUser?.full_name || ''}
+                disabled
+                className="bg-muted/60 border-border font-medium text-foreground cursor-not-allowed opacity-80"
+              />
+            ) : (
+              <Select value={form.tutor_id} onValueChange={handleTutorChange}>
+                <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select tutor..." /></SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  {tutors.map(t => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
           </Field>
 
           {/* Point */}

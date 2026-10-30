@@ -2,7 +2,7 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from 'lucide-react';
 
-export default function PaginationControl({ currentPage, totalPages, onPageChange }) {
+export default function Pagination({ currentPage, totalPages, onPageChange }) {
   if (totalPages <= 1) return null;
 
   const getPageNumbers = () => {
@@ -23,7 +23,6 @@ export default function PaginationControl({ currentPage, totalPages, onPageChang
 
   return (
     <div className="flex items-center justify-center gap-1.5 py-6">
-      {/* First Page (<<) */}
       <Button
         variant="outline"
         size="icon"
@@ -34,7 +33,6 @@ export default function PaginationControl({ currentPage, totalPages, onPageChang
         <ChevronsLeft className="w-4 h-4" />
       </Button>
 
-      {/* Previous (<) */}
       <Button
         variant="outline"
         size="icon"
@@ -45,7 +43,6 @@ export default function PaginationControl({ currentPage, totalPages, onPageChang
         <ChevronLeft className="w-4 h-4" />
       </Button>
 
-      {/* Angka Halaman & Ellipsis (...) */}
       {getPageNumbers().map((page, idx) => {
         if (page === '...') {
           return (
@@ -72,7 +69,6 @@ export default function PaginationControl({ currentPage, totalPages, onPageChang
         );
       })}
 
-      {/* Next (>) */}
       <Button
         variant="outline"
         size="icon"
@@ -83,7 +79,6 @@ export default function PaginationControl({ currentPage, totalPages, onPageChang
         <ChevronRight className="w-4 h-4" />
       </Button>
 
-      {/* Last Page (>>) */}
       <Button
         variant="outline"
         size="icon"
