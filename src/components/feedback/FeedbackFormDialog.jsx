@@ -1,13 +1,25 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
+const db = globalThis.__B44_DB__ || { 
+  auth: { isAuthenticated: async () => false, me: async () => null }, 
+  entities: new Proxy({}, { 
+    get: () => ({ 
+      filter: async () => [], 
+      get: async () => null, 
+      create: async () => ({}), 
+      update: async () => ({}), 
+      delete: async () => ({}) 
+    }) 
+  }), 
+  integrations: { Core: { UploadFile: async () => ({ file_url: '' }) } } 
+};
 
 import React, { useState, useEffect } from 'react';
-
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import StarPointInput from './StarPointInput';
 import PerformancePointPicker from './PerformancePointPicker';
 import { useAppAuth } from '@/lib/AppAuthContext';
@@ -72,7 +84,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
         }
         setForm(norm);
       } else {
-        // Otomatis isi data tutor dari pengguna yang sedang login saat membuat form baru
+        // Otomatis isi data tutor dari akun yang sedang login saat form baru dibuka
         setForm({
           ...EMPTY_FORM,
           tutor_id: currentUser?.id || '',
@@ -87,7 +99,6 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   const handleCourseChange = (courseName) => {
-    const course = courses.find(c => c.name === courseName);
     setForm(f => ({
       ...f,
       course_category_id: courseName,
@@ -104,7 +115,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
     if (t) setForm(f => ({ ...f, tutor_id: id, tutor_name: t.full_name, tutor_photo: t.photo_url || '', tutor_telegram: t.telegram_account || '' }));
   };
 
-  // Filtered modules by selected course
+  // Filtered modules berdasarkan course yang dipilih
   const courseModules = modules.filter(m => m.course_name === form.course_category_id);
   const availableMonths = [...new Set(courseModules.map(m => m.month).filter(Boolean))].sort((a, b) => a - b);
   const moduleTopics = [...new Set(courseModules.map(m => m.module_topic).filter(Boolean))];
@@ -165,36 +176,54 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
       }),
     };
 
-    if (editing) {
-      await db.entities.FeedbackRecord.update(editing.id, saveForm);
-    } else {
-      const created = await db.entities.FeedbackRecord.create(saveForm);
-      if (currentUser?.role === 'Tutor' || currentUser?.role === 'Team Leader') {
-        const admins = await db.entities.CustomUser.filter({ is_active: true });
-        const adminUsers = admins.filter(u => ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team'].includes(u.role));
-        await Promise.all(adminUsers.map(admin =>
-          db.entities.Notification.create({
-            recipient_id: admin.id,
+    try {
+      if (editing) {
+        await db.entities.FeedbackRecord.update(editing.id, saveForm);
+      } else {
+        const created = await db.entities.FeedbackRecord.create(saveForm);
+        if (currentUser?.role === 'Tutor' || currentUser?.role === 'Team Leader') {
+          const admins = await db.entities.CustomUser.filter({ is_active: true });
+          const adminUsers = admins.filter(u => ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team'].includes(u.role));
+          await Promise.all(adminUsers.map(admin =>
+            db.entities.Notification.create({
+              recipient_id: admin.id,
+              type: 'feedback_created',
+              title: 'New Student Feedback',
+              message: `${currentUser.full_name} submitted feedback for student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
+              reference_id: created?.id || '',
+              is_read: false,
+            })
+          ));
+        } else if (saveForm.tutor_id) {
+          await db.entities.Notification.create({
+            recipient_id: saveForm.tutor_id,
             type: 'feedback_created',
             title: 'New Student Feedback',
-            message: `${currentUser.full_name} submitted feedback for student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
+            message: `${currentUser?.full_name || 'Admin'} recorded feedback for your student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
             reference_id: created?.id || '',
             is_read: false,
-          })
-        ));
-      } else if (saveForm.tutor_id) {
-        await db.entities.Notification.create({
-          recipient_id: saveForm.tutor_id,
-          type: 'feedback_created',
-          title: 'New Student Feedback',
-          message: `${currentUser?.full_name || 'Admin'} recorded feedback for your student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
-          reference_id: created?.id || '',
-          is_read: false,
-        });
+          });
+        }
       }
+      setSaving(false);
+      onSaved();
+    } catch (err) {
+      console.error('Error saving feedback:', err);
+      toast.error('Gagal menyimpan feedback: ' + (err.message || 'Terjadi kesalahan'));
+      setSaving(false);
     }
-    setSaving(false);
-    onSaved();
+  };
+
+  // Handler khusus klik tombol submit untuk perangkat HP/Touch Screen
+  const handleSubmitClick = (e) => {
+    e.preventDefault();
+    if (!requiredComplete) {
+      toast.error('Form Belum Lengkap', {
+        description: 'Mohon pastikan Nama Siswa, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task Completion sudah terisi.',
+      });
+      return;
+    }
+    handleSave();
   };
 
   const isTutorRole = ['Tutor', 'Team Leader'].includes(currentUser?.role);
@@ -218,12 +247,17 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
           </Field>
 
           {/* Student Name */}
-          <Field label="Student Name">
-            <Input value={form.student_name} onChange={e => set('student_name', e.target.value)} placeholder="Enter student name..." className="bg-muted border-border" />
+          <Field label="Student Name *">
+            <Input 
+              value={form.student_name} 
+              onChange={e => set('student_name', e.target.value)} 
+              placeholder="Enter student name..." 
+              className="bg-muted border-border" 
+            />
           </Field>
 
           {/* Course Name */}
-          <Field label="Course Name">
+          <Field label="Course Name *">
             <Select value={form.course_category_id} onValueChange={handleCourseChange}>
               <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select course..." /></SelectTrigger>
               <SelectContent className="bg-card border-border">
@@ -233,7 +267,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
           </Field>
 
           {/* Month */}
-          <Field label="Month">
+          <Field label="Month *">
             <Select value={form.month ? String(form.month) : ''} onValueChange={v => handleMonthChange(Number(v))} disabled={!courseSelected}>
               <SelectTrigger className="bg-muted border-border disabled:opacity-50"><SelectValue placeholder={courseSelected ? 'Select month...' : 'Select course first'} /></SelectTrigger>
               <SelectContent className="bg-card border-border">
@@ -243,12 +277,17 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
           </Field>
 
           {/* Class Code */}
-          <Field label="Class Code">
-            <Input value={form.class_code} onChange={e => set('class_code', e.target.value)} placeholder="Enter class code..." className="bg-muted border-border" />
+          <Field label="Class Code *">
+            <Input 
+              value={form.class_code} 
+              onChange={e => set('class_code', e.target.value)} 
+              placeholder="Enter class code..." 
+              className="bg-muted border-border" 
+            />
           </Field>
 
-          {/* Tutor Name (Otomatis Terisi & Dikunci untuk Role Tutor/Team Leader) */}
-          <Field label="Tutor Name">
+          {/* Tutor Name (Otomatis & Dikunci untuk Role Tutor/Team Leader) */}
+          <Field label="Tutor Name *">
             {isTutorRole ? (
               <Input
                 value={form.tutor_name || currentUser?.full_name || ''}
@@ -266,7 +305,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
           </Field>
 
           {/* Point */}
-          <Field label="Point (0 – 5)">
+          <Field label="Point (0 – 5) *">
             <StarPointInput value={form.point} onChange={v => set('point', v)} />
           </Field>
 
@@ -338,7 +377,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
 
           {/* Presence */}
           <PerformancePointPicker
-            label="Presence"
+            label="Presence *"
             aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('presence'))}
             value={form.presence}
             onChange={v => set('presence', v)}
@@ -346,7 +385,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
 
           {/* Involvement and Difficulty */}
           <PerformancePointPicker
-            label="Involvement and Difficulty"
+            label="Involvement and Difficulty *"
             aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('involvement'))}
             value={form.involvement_difficulty}
             onChange={v => set('involvement_difficulty', v)}
@@ -354,7 +393,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
 
           {/* Task Completion */}
           <PerformancePointPicker
-            label="Task Completion"
+            label="Task Completion *"
             aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('task'))}
             value={form.task_completion}
             onChange={v => set('task_completion', v)}
@@ -386,18 +425,36 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
             </div>
           </Field>
 
-          <div className="flex flex-col items-end gap-2 pt-2">
+          {/* Section Action / Submit Button */}
+          <div className="flex flex-col items-end gap-2 pt-2 pb-4">
             {!requiredComplete && (
-              <p className="text-xs text-muted-foreground">Please complete all required fields (Student Name, Course, Month, Class Code, Tutor, Point, Presence, Involvement & Difficulty, Task Completion) to {editing ? 'update' : 'create'}.</p>
+              <p className="text-xs text-amber-400 text-right font-medium">
+                ⚠️ Mohon lengkapi bidang berlabel (*) seperti Nama Siswa, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task.
+              </p>
             )}
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={() => onOpenChange(false)} className="border-border">Cancel</Button>
-              <Button onClick={handleSave} disabled={saving || !requiredComplete} className="bg-primary hover:bg-primary/90">
+            <div className="flex justify-end gap-3 w-full sm:w-auto">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => onOpenChange(false)} 
+                className="border-border flex-1 sm:flex-initial"
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="button"
+                onClick={handleSubmitClick} 
+                disabled={saving} 
+                className={`flex-1 sm:flex-initial font-semibold transition-all ${
+                  requiredComplete ? 'bg-primary hover:bg-primary/90 text-white' : 'bg-muted-foreground/30 text-muted-foreground cursor-pointer'
+                }`}
+              >
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 {editing ? 'Update' : 'Create'}
               </Button>
             </div>
           </div>
+
         </div>
       </DialogContent>
     </Dialog>
