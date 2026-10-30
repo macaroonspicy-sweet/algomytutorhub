@@ -1,7 +1,10 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
+const db = globalThis.__B44_DB__ || { 
+  auth: { isAuthenticated: async () => false, me: async () => null }, 
+  entities: new Proxy({}, { get: () => ({ filter: async () => [], get: async () => null, create: async () => ({}), update: async () => ({}), delete: async () => ({}) }) }), 
+  integrations: { Core: { UploadFile: async () => ({ file_url: '' }) } } 
+};
 
 import React, { useState, useEffect } from 'react';
-
 import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,14 +37,16 @@ export default function StudentFeedback() {
   const [filterRecordYear, setFilterRecordYear] = useState('all');
   const [filterMyOnly, setFilterMyOnly] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const ITEMS_PER_PAGE = 10; // 10 data per page
+  const ITEMS_PER_PAGE = 10; // 10 data per halaman
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const canDelete = hasPermission('student_feedback_delete');
   const showCreatorInfo = ['Head of Tutor', 'Head of Retention', 'QC Team'].includes(currentUser?.role);
   const isTeamLeader = currentUser?.role === 'Team Leader';
 
-  useEffect(() => { if (currentUser?.id) { loadData(); } }, [currentUser?.id]);
+  useEffect(() => { 
+    if (currentUser?.id) { loadData(); } 
+  }, [currentUser?.id]);
 
   const loadData = async () => {
     setLoading(true);
@@ -52,7 +57,7 @@ export default function StudentFeedback() {
       db.entities.StudentPerformanceCategory.list('order_index'),
     ]);
 
-    // PAKSA SORTING DESCENDING DI LEVEL FRONTEND (Data Terbaru Paling Atas)
+    // PAKSA SORTING DESCENDING: Data Terbaru Selalu di Baris Pertama
     const sortedRecs = [...(recs || [])].sort((a, b) => {
       const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
       const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
@@ -84,7 +89,7 @@ export default function StudentFeedback() {
     if (filterRecordYear !== 'all') filtered = filtered.filter(r => String(r.record_year) === filterRecordYear);
     if (filterMyOnly) filtered = filtered.filter(r => r.tutor_id === currentUser.id);
 
-    // Tetap urutkan descending setelah difilter
+    // Re-sort descending setelah filter
     filtered.sort((a, b) => {
       const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
       const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
@@ -95,7 +100,7 @@ export default function StudentFeedback() {
     setCurrentPage(1);
   }, [searchQuery, filterCourse, filterTutor, filterMonth, filterRecordMonth, filterRecordYear, filterMyOnly, allRecords, currentUser]);
 
-  // Calculate pagination
+  // Logic Pagination
   const totalPages = Math.ceil(records.length / ITEMS_PER_PAGE) || 1;
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
@@ -149,7 +154,7 @@ export default function StudentFeedback() {
 
   const handlePreview = (r) => { setPreviewRecord(r); setPreviewOpen(true); };
 
-  // Helper untuk urutan angka pagination dengan ellipsis (...)
+  // Helper Pagination dengan Ellipsis
   const getPageNumbers = () => {
     const pages = [];
     if (totalPages <= 7) {
@@ -325,7 +330,6 @@ export default function StudentFeedback() {
           {/* PURPLE STYLED PAGINATION UI */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-1.5 py-6">
-              {/* First Page (<<) */}
               <Button
                 variant="outline"
                 size="icon"
@@ -336,7 +340,6 @@ export default function StudentFeedback() {
                 <ChevronsLeft className="w-4 h-4" />
               </Button>
 
-              {/* Previous (<) */}
               <Button
                 variant="outline"
                 size="icon"
@@ -347,7 +350,6 @@ export default function StudentFeedback() {
                 <ChevronLeft className="w-4 h-4" />
               </Button>
 
-              {/* Page Numbers */}
               {getPageNumbers().map((page, idx) => {
                 if (page === '...') {
                   return (
@@ -374,7 +376,6 @@ export default function StudentFeedback() {
                 );
               })}
 
-              {/* Next (>) */}
               <Button
                 variant="outline"
                 size="icon"
@@ -385,7 +386,6 @@ export default function StudentFeedback() {
                 <ChevronRight className="w-4 h-4" />
               </Button>
 
-              {/* Last Page (>>) */}
               <Button
                 variant="outline"
                 size="icon"
