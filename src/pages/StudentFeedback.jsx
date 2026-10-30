@@ -6,12 +6,11 @@ import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Pencil, Trash2, Star, Eye, Loader2, Search, Filter, FileSpreadsheet } from 'lucide-react';
+import { Plus, Pencil, Trash2, Star, Eye, Loader2, Search, Filter, FileSpreadsheet, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from 'lucide-react';
 import ExportDialog from '@/components/export/ExportDialog';
 import { toast } from 'sonner';
 import FeedbackFormDialog from '@/components/feedback/FeedbackFormDialog';
 import FeedbackPDFPreview from '@/components/feedback/FeedbackPDFPreview';
-import Pagination from '@/components/ui/pagination';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 
 export default function StudentFeedback() {
@@ -35,36 +34,41 @@ export default function StudentFeedback() {
   const [filterRecordYear, setFilterRecordYear] = useState('all');
   const [filterMyOnly, setFilterMyOnly] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const ITEMS_PER_PAGE = 12;
+  const ITEMS_PER_PAGE = 10; // 10 data per page
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const canDelete = hasPermission('student_feedback_delete');
   const showCreatorInfo = ['Head of Tutor', 'Head of Retention', 'QC Team'].includes(currentUser?.role);
   const isTeamLeader = currentUser?.role === 'Team Leader';
 
-  // useEffect(() => { loadData(); }, []);
-  useEffect(() => {if (currentUser?.id) {loadData();}}, [currentUser?.id]);
+  useEffect(() => { if (currentUser?.id) { loadData(); } }, [currentUser?.id]);
 
   const loadData = async () => {
     setLoading(true);
     const [recs, perfs] = await Promise.all([
-      // Filter: Tutor hanya lihat feedback mereka sendiri, Admin/Head lihat semua
       (currentUser?.role === 'Tutor' || currentUser?.role === 'Feedback Team')
         ? db.entities.FeedbackRecord.filter({ tutor_id: currentUser.id }, '-created_date')
         : db.entities.FeedbackRecord.list('-created_date'),
       db.entities.StudentPerformanceCategory.list('order_index'),
     ]);
-    setAllRecords(recs);
-    setRecords(recs);
-    setPerfCategories(perfs);
+
+    // PAKSA SORTING DESCENDING DI LEVEL FRONTEND (Data Terbaru Paling Atas)
+    const sortedRecs = [...(recs || [])].sort((a, b) => {
+      const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
+      const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
+      return timeB - timeA;
+    });
+
+    setAllRecords(sortedRecs);
+    setRecords(sortedRecs);
+    setPerfCategories(perfs || []);
     setLoading(false);
   };
 
   // Apply search and filters
   useEffect(() => {
-    let filtered = allRecords;
+    let filtered = [...allRecords];
 
-    // Search by student name or class code
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(r => 
@@ -73,58 +77,40 @@ export default function StudentFeedback() {
       );
     }
 
-    // Filter by course
-    if (filterCourse !== 'all') {
-      filtered = filtered.filter(r => r.course_name === filterCourse);
-    }
+    if (filterCourse !== 'all') filtered = filtered.filter(r => r.course_name === filterCourse);
+    if (filterTutor !== 'all') filtered = filtered.filter(r => r.tutor_id === filterTutor);
+    if (filterMonth !== 'all') filtered = filtered.filter(r => String(r.month) === filterMonth);
+    if (filterRecordMonth !== 'all') filtered = filtered.filter(r => String(r.record_month) === filterRecordMonth);
+    if (filterRecordYear !== 'all') filtered = filtered.filter(r => String(r.record_year) === filterRecordYear);
+    if (filterMyOnly) filtered = filtered.filter(r => r.tutor_id === currentUser.id);
 
-    // Filter by tutor
-    if (filterTutor !== 'all') {
-      filtered = filtered.filter(r => r.tutor_id === filterTutor);
-    }
-
-    // Filter by module month
-    if (filterMonth !== 'all') {
-      filtered = filtered.filter(r => String(r.month) === filterMonth);
-    }
-
-    // Filter by record month/year
-    if (filterRecordMonth !== 'all') {
-      filtered = filtered.filter(r => String(r.record_month) === filterRecordMonth);
-    }
-    if (filterRecordYear !== 'all') {
-      filtered = filtered.filter(r => String(r.record_year) === filterRecordYear);
-    }
-
-    // Team Leader: filter to own feedback only
-    if (filterMyOnly) {
-      filtered = filtered.filter(r => r.tutor_id === currentUser.id);
-    }
+    // Tetap urutkan descending setelah difilter
+    filtered.sort((a, b) => {
+      const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
+      const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
+      return timeB - timeA;
+    });
 
     setRecords(filtered);
     setCurrentPage(1);
   }, [searchQuery, filterCourse, filterTutor, filterMonth, filterRecordMonth, filterRecordYear, filterMyOnly, allRecords, currentUser]);
 
   // Calculate pagination
-  const totalPages = Math.ceil(records.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(records.length / ITEMS_PER_PAGE) || 1;
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const paginatedRecords = records.slice(startIndex, endIndex);
 
-  // Get unique values for filters
   const uniqueCourses = [...new Set(allRecords.map(r => r.course_name).filter(Boolean))];
   const uniqueTutors = allRecords.filter(r => r.tutor_name && r.tutor_id)
     .reduce((acc, r) => {
-      if (!acc.find(t => t.id === r.tutor_id)) {
-        acc.push({ id: r.tutor_id, name: r.tutor_name });
-      }
+      if (!acc.find(t => t.id === r.tutor_id)) acc.push({ id: r.tutor_id, name: r.tutor_name });
       return acc;
     }, []);
   const uniqueMonths = [...new Set(allRecords.map(r => r.month).filter(Boolean))];
   const uniqueRecordYears = [...new Set(allRecords.map(r => r.record_year).filter(Boolean))].sort((a,b) => b - a);
   const MONTHS_LABEL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
-  // Decode "aspectId::pointNumber" -> { pointNum, description, aspect }
   const decodePerfValue = (val) => {
     if (!val || !val.includes('::')) return null;
     const parts = val.split('::');
@@ -162,6 +148,23 @@ export default function StudentFeedback() {
   };
 
   const handlePreview = (r) => { setPreviewRecord(r); setPreviewOpen(true); };
+
+  // Helper untuk urutan angka pagination dengan ellipsis (...)
+  const getPageNumbers = () => {
+    const pages = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 3) {
+        pages.push(1, 2, 3, 4, 5, '...', totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+      } else {
+        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+      }
+    }
+    return pages;
+  };
 
   return (
     <div className="space-y-6">
@@ -205,7 +208,7 @@ export default function StudentFeedback() {
             </SelectContent>
           </Select>
         </div>
-        {/* Record date filters */}
+
         <div className="flex flex-col sm:flex-row gap-3">
           <Select value={filterRecordMonth} onValueChange={setFilterRecordMonth}>
             <SelectTrigger className="w-full sm:w-40">
@@ -252,6 +255,7 @@ export default function StudentFeedback() {
             </SelectContent>
           </Select>
         </div>
+
         {isTeamLeader && (
           <Button
             variant={filterMyOnly ? 'default' : 'outline'}
@@ -262,6 +266,7 @@ export default function StudentFeedback() {
             <Filter className="w-3.5 h-3.5" /> My Feedback Only
           </Button>
         )}
+
         {(searchQuery || filterCourse !== 'all' || filterTutor !== 'all' || filterMonth !== 'all' || filterRecordMonth !== 'all' || filterRecordYear !== 'all' || filterMyOnly) && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Filter className="w-3 h-3" />
@@ -284,6 +289,7 @@ export default function StudentFeedback() {
             </Button>
           </div>
         )}
+
         {records.length > 0 && (
           <div className="text-xs text-muted-foreground text-center">
             Showing {startIndex + 1} to {Math.min(endIndex, records.length)} of {records.length} records
@@ -299,7 +305,7 @@ export default function StudentFeedback() {
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {paginatedRecords.map(r => (
               <RecordCard
-                key={r.id}
+                key={r.id || r.created_date}
                 record={r}
                 decodePerfValue={decodePerfValue}
                 onEdit={() => openEdit(r)}
@@ -315,12 +321,81 @@ export default function StudentFeedback() {
               </div>
             )}
           </div>
+
+          {/* PURPLE STYLED PAGINATION UI */}
           {totalPages > 1 && (
-            <Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={setCurrentPage}
-            />
+            <div className="flex items-center justify-center gap-1.5 py-6">
+              {/* First Page (<<) */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+              >
+                <ChevronsLeft className="w-4 h-4" />
+              </Button>
+
+              {/* Previous (<) */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+
+              {/* Page Numbers */}
+              {getPageNumbers().map((page, idx) => {
+                if (page === '...') {
+                  return (
+                    <span key={`dots-${idx}`} className="px-2 text-sm text-muted-foreground select-none">
+                      ...
+                    </span>
+                  );
+                }
+
+                const isActive = page === currentPage;
+                return (
+                  <Button
+                    key={page}
+                    variant={isActive ? 'default' : 'outline'}
+                    onClick={() => setCurrentPage(page)}
+                    className={`w-9 h-9 rounded-xl text-sm font-medium transition-colors ${
+                      isActive
+                        ? 'bg-purple-600 hover:bg-purple-700 text-white font-semibold border-purple-600 shadow-md shadow-purple-900/30'
+                        : 'border-border bg-card hover:bg-secondary text-foreground/80'
+                    }`}
+                  >
+                    {page}
+                  </Button>
+                );
+              })}
+
+              {/* Next (>) */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+
+              {/* Last Page (>>) */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="w-9 h-9 rounded-xl border-border bg-card hover:bg-secondary disabled:opacity-30"
+              >
+                <ChevronsRight className="w-4 h-4" />
+              </Button>
+            </div>
           )}
         </>
       )}
@@ -403,7 +478,6 @@ function RecordCard({ record: r, decodePerfValue, onEdit, onDelete, onPreview, c
         </div>
       </div>
 
-      {/* Stars */}
       <div className="flex items-center gap-1">
         {[1, 2, 3, 4, 5].map((s) => {
           const fill = Math.min(Math.max(stars - (s - 1), 0), 1);
@@ -419,18 +493,15 @@ function RecordCard({ record: r, decodePerfValue, onEdit, onDelete, onPreview, c
         <span className="text-xs text-muted-foreground ml-1">{stars}/5</span>
       </div>
 
-      {/* Performance tags - decoded */}
       <div className="flex flex-wrap gap-1">
         {presDecoded && <Tag>Presence: Point {presDecoded.pointNum}</Tag>}
         {invDecoded && <Tag>Involvement: Point {invDecoded.pointNum}</Tag>}
         {taskDecoded && <Tag>Task: Point {taskDecoded.pointNum}</Tag>}
-        {/* Fallback for old data format */}
         {!presDecoded && r.presence && <Tag>{r.presence}</Tag>}
         {!invDecoded && r.involvement_difficulty && <Tag>{r.involvement_difficulty}</Tag>}
         {!taskDecoded && r.task_completion && <Tag>{r.task_completion}</Tag>}
       </div>
 
-      {/* Project link */}
       {r.project_link && (
         isSafeProjectLink ? (
           <a href={r.project_link} target="_blank" rel="noreferrer" className="text-xs text-accent underline break-all block">{r.project_link}</a>
@@ -439,7 +510,6 @@ function RecordCard({ record: r, decodePerfValue, onEdit, onDelete, onPreview, c
         )
       )}
 
-      {/* Preview PDF */}
       <Button size="sm" variant="outline" onClick={onPreview} className="w-full gap-1.5 border-border text-xs h-8">
         <Eye className="w-3 h-3" /> Preview PDF
       </Button>
