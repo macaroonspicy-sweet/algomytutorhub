@@ -75,50 +75,21 @@ export function AppAuthProvider({ children }) {
     }
   }, []);
 
-  const hashPassword = async (password) => {
-    const msgBuffer = new TextEncoder().encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  };
-
   const login = async (identifier, password) => {
-    const identifierClean = identifier.trim().toLowerCase();
+    // Memanggil Vercel Serverless API Proxy
+    const response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, password }),
+    });
 
-    const { data: users, error } = await supabase
-      .from('CustomUser')
-      .select('*')
-      .or(`email.ilike.${identifierClean},username.ilike.${identifierClean}`);
+    const result = await response.json();
 
-    if (error) {
-      console.error('[Supabase Auth Error]:', error.message);
-      throw new Error('Gagal terhubung ke server database');
+    if (!response.ok) {
+      throw new Error(result.error || 'Login failed');
     }
 
-    const user = (users && users[0]) || null;
-    if (!user) throw new Error('User not found');
-    if (user.is_active === false) throw new Error('Account is inactive');
-
-    const hashedPassword = await hashPassword(password);
-    const storedHash = user.password_hash || '';
-
-    if (storedHash.startsWith('sha256:')) {
-      if (storedHash !== `sha256:${hashedPassword}`) throw new Error('Invalid password');
-    } else if (storedHash.length === 64 && /^[0-9a-f]+$/.test(storedHash)) {
-      if (storedHash !== hashedPassword) throw new Error('Invalid password');
-      await supabase.from('CustomUser').update({ password_hash: `sha256:${hashedPassword}` }).eq('id', user.id);
-    } else {
-      if (storedHash !== password) {
-        const legacyHash = await hashPassword(storedHash);
-        if (legacyHash !== hashedPassword) throw new Error('Invalid password');
-      }
-      await supabase.from('CustomUser').update({ password_hash: `sha256:${hashedPassword}` }).eq('id', user.id);
-    }
-
-    const sessionToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
-    await supabase.from('CustomUser').update({ session_token: sessionToken }).eq('id', user.id);
-
-    const effectiveUser = applyEffectiveRbac({ ...user, session_token: sessionToken });
+    const effectiveUser = applyEffectiveRbac(result);
     setCurrentUser(effectiveUser);
     localStorage.setItem('tutorhu_user', JSON.stringify(effectiveUser));
     return effectiveUser;
