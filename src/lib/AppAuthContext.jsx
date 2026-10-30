@@ -1,15 +1,18 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabaseClient';
 
 const AppAuthContext = createContext(null);
 
 async function ensureSessionToken(user) {
   if (!user) return user;
   if (user.session_token) return user;
-  const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
   try {
-    await supabase.from('CustomUser').update({ session_token: token }).eq('id', user.id);
-    return { ...user, session_token: token };
+    const res = await fetch('/api/user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'ensure_token', id: user.id }),
+    });
+    const data = await res.json();
+    return { ...user, session_token: data.session_token };
   } catch {
     return user;
   }
@@ -56,11 +59,13 @@ export function AppAuthProvider({ children }) {
       const cached = JSON.parse(stored);
       setCurrentUser(applyEffectiveRbac(cached));
 
-      supabase.from('CustomUser')
-        .select('*')
-        .eq('email', cached.email)
-        .maybeSingle()
-        .then(async ({ data: user }) => {
+      fetch('/api/user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cached.email }),
+      })
+        .then(res => res.json())
+        .then(async ({ user }) => {
           if (user) {
             const withSession = await ensureSessionToken(user);
             const fresh = applyEffectiveRbac(withSession);
@@ -76,7 +81,6 @@ export function AppAuthProvider({ children }) {
   }, []);
 
   const login = async (identifier, password) => {
-    // Memanggil Vercel Serverless API Proxy
     const response = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -105,17 +109,19 @@ export function AppAuthProvider({ children }) {
     if (!stored) return;
     const parsed = JSON.parse(stored);
 
-    const { data: user } = await supabase
-      .from('CustomUser')
-      .select('*')
-      .eq('email', parsed.email)
-      .maybeSingle();
-
-    if (user) {
-      const fresh = applyEffectiveRbac(await ensureSessionToken(user));
-      setCurrentUser(fresh);
-      localStorage.setItem('tutorhu_user', JSON.stringify(fresh));
-    }
+    try {
+      const res = await fetch('/api/user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: parsed.email }),
+      });
+      const { user } = await res.json();
+      if (user) {
+        const fresh = applyEffectiveRbac(await ensureSessionToken(user));
+        setCurrentUser(fresh);
+        localStorage.setItem('tutorhu_user', JSON.stringify(fresh));
+      }
+    } catch {}
   };
 
   const hasPermission = (key) => {
