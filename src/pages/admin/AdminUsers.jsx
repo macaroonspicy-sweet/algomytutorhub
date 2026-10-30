@@ -1,16 +1,22 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
+const db = globalThis.__B44_DB__ || { 
+  auth: { isAuthenticated: async () => false, me: async () => null }, 
+  entities: new Proxy({}, { 
+    get: () => ({ filter: async () => [], get: async () => null, create: async () => ({}), update: async () => ({}), delete: async () => ({}) }) 
+  }), 
+  integrations: { Core: { UploadFile: async () => ({ file_url: '' }) } } 
+};
 
 import React, { useState, useEffect } from 'react';
-
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, Search, Camera, Loader2, Filter, X, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, Camera, Loader2, Filter, X, Eye, EyeOff, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
+import { supabase } from '@/lib/supabaseClient'; // Integrasi Supabase Storage untuk foto profil
 
 const ROLES = ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team', 'Team Leader', 'Tutor'];
 
@@ -20,6 +26,7 @@ async function hashPassword(password) {
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
+
 const RBAC_STRUCTURE = [
   {
     category: 'General',
@@ -76,9 +83,14 @@ const RBAC_STRUCTURE = [
   },
 ];
 
-const RBAC_KEYS = RBAC_STRUCTURE.flatMap(cat => cat.permissions);
-
-const DEFAULT_RBAC = { dashboard: false, admin_crud: false, qc_records: false, qc_monthly: false, student_feedback: false, student_feedback_delete: false, student_performance: false, student_performance_delete: false, qc_records_delete: false, qc_monthly_delete: false, my_qc: false, category_courses: false, category_qc: false, category_module: false, pdf_settings: false, weekly_feedback: false, weekly_feedback_delete: false, task_management: false, my_tasks: false, my_weekly_feedback: false };
+const DEFAULT_RBAC = { 
+  dashboard: false, admin_crud: false, qc_records: false, qc_monthly: false, 
+  student_feedback: false, student_feedback_delete: false, student_performance: false, 
+  student_performance_delete: false, qc_records_delete: false, qc_monthly_delete: false, 
+  my_qc: false, category_courses: false, category_qc: false, category_module: false, 
+  pdf_settings: false, weekly_feedback: false, weekly_feedback_delete: false, 
+  task_management: false, my_tasks: false, my_weekly_feedback: false 
+};
 
 const EMPTY_FORM = {
   full_name: '', username: '', phone_number: '', telegram_account: '', email: '',
@@ -102,22 +114,31 @@ export default function AdminUsers() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(10);
+  const [itemsPerPage] = useState(10); // 10 data per halaman
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [sortOrder, setSortOrder] = useState('asc'); // 'asc' | 'desc'
+  const [sortOrder, setSortOrder] = useState('asc');
 
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     const [u, c] = await Promise.all([db.entities.CustomUser.list(), db.entities.CourseCategory.list()]);
-    setUsers(u); setCourses(c);
+    setUsers(u || []); 
+    setCourses(c || []);
   };
 
-  const openCreate = () => { setEditing(null); setForm(EMPTY_FORM); setPhotoFile(null); setPhotoPreview(''); setError(''); setOpen(true); };
+  const openCreate = () => { 
+    setEditing(null); 
+    setForm(EMPTY_FORM); 
+    setPhotoFile(null); 
+    setPhotoPreview(''); 
+    setError(''); 
+    setOpen(true); 
+  };
+
   const openEdit = (u) => {
     setEditing(u);
     const mergedRbac = { ...DEFAULT_RBAC, ...(u.rbac || {}) };
-    delete mergedRbac.qc_tutor; // hapus key lama agar tidak override default
+    delete mergedRbac.qc_tutor;
     setForm({ ...EMPTY_FORM, ...u, password: '', confirm_password: '', rbac: mergedRbac });
     setPhotoPreview(u.photo_url || '');
     setPhotoFile(null);
@@ -125,9 +146,7 @@ export default function AdminUsers() {
     setOpen(true);
   };
 
-  const handleDelete = (id) => {
-    setDeleteTarget(id);
-  };
+  const handleDelete = (id) => { setDeleteTarget(id); };
 
   const confirmDelete = async () => {
     await db.entities.CustomUser.delete(deleteTarget);
@@ -143,32 +162,80 @@ export default function AdminUsers() {
     setPhotoPreview(URL.createObjectURL(file));
   };
 
+  // Upload foto langsung ke Supabase Storage
+  const uploadPhotoToSupabase = async (file) => {
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `profiles/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('tutor-photos')
+        .upload(filePath, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('tutor-photos')
+        .getPublicUrl(filePath);
+
+      return urlData.publicUrl;
+    } catch (err) {
+      console.error('Error uploading photo:', err);
+      // Fallback ke mock upload jika Supabase storage belum terhubung
+      const { file_url } = await db.integrations.Core.UploadFile({ file });
+      return file_url || '';
+    }
+  };
+
   const handleSave = async () => {
     setError('');
-    if (!form.full_name || !form.username || !form.role) { setError('Full Name, Username, and Role are required'); return; }
-    if (!editing && !form.password) { setError('Password is required'); return; }
-    if (form.password && form.password !== form.confirm_password) { setError('Passwords do not match'); return; }
-    // Check duplicate username
+    if (!form.full_name || !form.username || !form.role) { 
+      setError('Full Name, Username, and Role are required'); 
+      return; 
+    }
+    if (!editing && !form.password) { 
+      setError('Password is required'); 
+      return; 
+    }
+    if (form.password && form.password !== form.confirm_password) { 
+      setError('Passwords do not match'); 
+      return; 
+    }
+
     const existingUsers = await db.entities.CustomUser.list();
     const duplicate = existingUsers.find(u => u.username?.toLowerCase() === form.username.toLowerCase() && u.id !== editing?.id);
-    if (duplicate) { setError(`Username "@${form.username}" sudah digunakan oleh akun lain`); setSaving(false); return; }
+    if (duplicate) { 
+      setError(`Username "@${form.username}" sudah digunakan oleh akun lain`); 
+      setSaving(false); 
+      return; 
+    }
+
     setSaving(true);
     let photoUrl = form.photo_url || '';
     if (photoFile) {
-      const { file_url } = await db.integrations.Core.UploadFile({ file: photoFile });
-      photoUrl = file_url;
+      photoUrl = await uploadPhotoToSupabase(photoFile);
     }
-    // Merge dengan DEFAULT_RBAC agar semua key selalu ada, hapus key lama qc_tutor
+
     const cleanRbac = { ...DEFAULT_RBAC, ...form.rbac };
     delete cleanRbac.qc_tutor;
+
     const data = {
-      full_name: form.full_name, username: form.username, phone_number: form.phone_number,
-      telegram_account: form.telegram_account, email: form.email,
-      role: form.role,       taught_courses: ['Tutor', 'Team Leader'].includes(form.role) ? form.taught_courses : [],
-      link_bo: form.link_bo, photo_url: photoUrl, rbac: cleanRbac,
+      full_name: form.full_name,
+      username: form.username,
+      phone_number: form.phone_number,
+      telegram_account: form.telegram_account,
+      email: form.email,
+      role: form.role,
+      taught_courses: ['Tutor', 'Team Leader'].includes(form.role) ? form.taught_courses : [],
+      link_bo: form.link_bo,
+      photo_url: photoUrl,
+      rbac: cleanRbac,
       is_active: form.is_active !== false,
     };
+
     if (form.password) data.password_hash = `sha256:${await hashPassword(form.password)}`;
+
     if (editing) {
       await db.entities.CustomUser.update(editing.id, data);
       toast.success('Admin updated', { description: `${data.full_name}'s account has been updated.` });
@@ -176,6 +243,7 @@ export default function AdminUsers() {
       await db.entities.CustomUser.create(data);
       toast.success('Admin created', { description: `${data.full_name}'s account has been created.` });
     }
+
     setSaving(false);
     setOpen(false);
     loadData();
@@ -183,7 +251,9 @@ export default function AdminUsers() {
 
   const filtered = users
     .filter(u => {
-      const matchSearch = u.full_name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase()) || u.username?.toLowerCase().includes(search.toLowerCase());
+      const matchSearch = u.full_name?.toLowerCase().includes(search.toLowerCase()) || 
+                          u.email?.toLowerCase().includes(search.toLowerCase()) || 
+                          u.username?.toLowerCase().includes(search.toLowerCase());
       const matchRole = filterRole === 'all' || u.role === filterRole;
       const matchActive = filterActive === 'all' || (filterActive === 'active' ? u.is_active !== false : u.is_active === false);
       return matchSearch && matchRole && matchActive;
@@ -193,15 +263,15 @@ export default function AdminUsers() {
       const nameB = (b.full_name || '').toLowerCase();
       return sortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
     });
+
   const hasFilters = filterRole !== 'all' || filterActive !== 'all';
   
-  // Pagination
-  const totalPages = Math.ceil(filtered.length / itemsPerPage);
+  // Pagination (10 item per halaman)
+  const totalPages = Math.ceil(filtered.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
   const paginatedData = filtered.slice(startIndex, endIndex);
   
-  // Reset to page 1 when filters change
   useEffect(() => { setCurrentPage(1); }, [search, filterRole, filterActive]);
 
   return (
@@ -297,7 +367,7 @@ export default function AdminUsers() {
                       'bg-secondary text-secondary-foreground border-border'
                     } variant="outline">{u.role}</Badge>
                   </td>
-                  <td className="px-5 py-4 text-sm text-muted-foreground">{u.email}</td>
+                  <td className="px-5 py-4 text-sm text-muted-foreground">{u.email || '—'}</td>
                   <td className="px-5 py-4 text-sm text-muted-foreground">
                     {u.link_bo ? (
                       <a href={u.link_bo} target="_blank" rel="noreferrer" className="text-accent hover:underline flex items-center gap-1">
@@ -325,25 +395,25 @@ export default function AdminUsers() {
                 </tr>
               ))}
               {paginatedData.length === 0 && (
-                <tr><td colSpan={5} className="px-5 py-10 text-center text-muted-foreground">No admins found</td></tr>
+                <tr><td colSpan={6} className="px-5 py-10 text-center text-muted-foreground">No users found</td></tr>
               )}
             </tbody>
           </table>
         </div>
         
-        {/* Pagination Controls */}
+        {/* Pagination Controls per 10 Data */}
         {totalPages > 1 && (
-          <div className="border-t border-border px-5 py-4 flex items-center justify-between gap-4">
+          <div className="border-t border-border px-5 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="text-sm text-muted-foreground">
               Showing {startIndex + 1} to {Math.min(endIndex, filtered.length)} of {filtered.length} entries
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
-                className="border-border"
+                className="border-border text-xs"
               >
                 First
               </Button>
@@ -352,41 +422,40 @@ export default function AdminUsers() {
                 size="sm"
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                 disabled={currentPage === 1}
-                className="border-border"
+                className="border-border text-xs"
               >
                 Previous
               </Button>
+              
               <div className="flex items-center gap-1">
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNum;
-                  if (totalPages <= 5) {
-                    pageNum = i + 1;
-                  } else if (currentPage <= 3) {
-                    pageNum = i + 1;
-                  } else if (currentPage >= totalPages - 2) {
-                    pageNum = totalPages - 4 + i;
-                  } else {
-                    pageNum = currentPage - 2 + i;
-                  }
-                  return (
-                    <Button
-                      key={pageNum}
-                      variant={currentPage === pageNum ? 'default' : 'outline'}
-                      size="sm"
-                      onClick={() => setCurrentPage(pageNum)}
-                      className={currentPage === pageNum ? 'bg-primary' : 'border-border'}
-                    >
-                      {pageNum}
-                    </Button>
-                  );
-                })}
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                  .map((pageNum, idx, arr) => {
+                    const prevPage = arr[idx - 1];
+                    const showEllipsis = prevPage && pageNum - prevPage > 1;
+
+                    return (
+                      <React.Fragment key={pageNum}>
+                        {showEllipsis && <span className="px-1 text-xs text-muted-foreground">...</span>}
+                        <Button
+                          variant={currentPage === pageNum ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`text-xs w-8 h-8 p-0 ${currentPage === pageNum ? 'bg-primary' : 'border-border'}`}
+                        >
+                          {pageNum}
+                        </Button>
+                      </React.Fragment>
+                    );
+                  })}
               </div>
+
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                 disabled={currentPage === totalPages}
-                className="border-border"
+                className="border-border text-xs"
               >
                 Next
               </Button>
@@ -395,7 +464,7 @@ export default function AdminUsers() {
                 size="sm"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
-                className="border-border"
+                className="border-border text-xs"
               >
                 Last
               </Button>
@@ -407,10 +476,9 @@ export default function AdminUsers() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="bg-card border-border max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Admin' : 'Add New Admin'}</DialogTitle>
+            <DialogTitle>{editing ? 'Edit User' : 'Add New User'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-5 pt-2">
-            {/* Photo */}
             <div className="flex items-center gap-4">
               <div className="relative">
                 {photoPreview ? (
@@ -425,7 +493,7 @@ export default function AdminUsers() {
                   <input type="file" accept="image/*" onChange={handlePhotoChange} className="hidden" />
                 </label>
               </div>
-              <div className="text-sm text-muted-foreground">Click the camera icon to upload a profile photo</div>
+              <div className="text-sm text-muted-foreground">Click the camera icon to upload or change profile photo</div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -435,7 +503,7 @@ export default function AdminUsers() {
                 { label: 'Phone Number', key: 'phone_number' },
                 { label: 'Telegram Account', key: 'telegram_account' },
                 { label: 'Email', key: 'email', type: 'email' },
-                { label: 'Link Bo', key: 'link_bo' },
+                { label: 'Link BO', key: 'link_bo' },
               ].map(f => (
                 <div key={f.key} className="space-y-1.5">
                   <Label className="text-sm text-foreground/80">{f.label}</Label>
