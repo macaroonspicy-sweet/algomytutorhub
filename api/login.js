@@ -1,20 +1,27 @@
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Membaca VITE_SUPABASE_URL atau SUPABASE_URL
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 function hashPassword(password) {
   return crypto.createHash('sha256').update(password).digest('hex');
 }
 
 export default async function handler(req, res) {
+  // Hanya terima method POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Cek apakah Environment Variables terbaca di server Vercel
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('Missing Supabase Environment Variables in Vercel Serverless');
+    return res.status(500).json({ error: 'Server config error: Missing Supabase Env Variables' });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseAnonKey);
   const { identifier, password } = req.body;
 
   if (!identifier || !password) {
@@ -24,7 +31,7 @@ export default async function handler(req, res) {
   try {
     const identifierClean = identifier.trim().toLowerCase();
 
-    // Query ke tabel CustomUser dilakukan dari Server Vercel (Bypass blokir ISP)
+    // Query dari server Vercel ke Supabase
     const { data: users, error } = await supabase
       .from('CustomUser')
       .select('*')
@@ -32,7 +39,7 @@ export default async function handler(req, res) {
 
     if (error) {
       console.error('[API Auth Error]:', error.message);
-      return res.status(500).json({ error: 'Gagal terhubung ke server database' });
+      return res.status(500).json({ error: `Database Error: ${error.message}` });
     }
 
     const user = (users && users[0]) || null;
@@ -74,6 +81,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ ...user, session_token: sessionToken });
   } catch (err) {
     console.error('[Server Error]:', err);
-    return res.status(500).json({ error: 'Gagal terhubung ke server database' });
+    return res.status(500).json({ error: err.message || 'Gagal terhubung ke server database' });
   }
 }
