@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -6,9 +7,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Download, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { db } from '@/api/base44Client';
 
-export default function ExportDialog({ open, onOpenChange, modules, filters, defaultModule }) {
+export default function ExportDialog({ open, onOpenChange, modules = [], filters = {}, defaultModule }) {
   const [selected, setSelected] = useState([defaultModule || modules[0]?.value]);
   const [scope, setScope] = useState('all');
   const [loading, setLoading] = useState(false);
@@ -59,50 +59,46 @@ export default function ExportDialog({ open, onOpenChange, modules, filters, def
 
       for (const modVal of selected) {
         let records = [];
+        let tableName = '';
 
-        // 1. Ambil daftar entitas yang tersedia di db.entities
-        const availableEntities = Object.keys(db.entities || {});
-        
-        // 2. Tentukan nama entitas target berdasarkan kata kunci modVal
-        const strVal = String(modVal).toLowerCase();
-        let targetEntity = modVal;
-
-        if (strVal.includes('student') || strVal.includes('feedback_records')) {
-          targetEntity = availableEntities.find(e => e.toLowerCase().includes('studentfeedback')) || 'StudentFeedback';
-        } else if (strVal.includes('weekly')) {
-          targetEntity = availableEntities.find(e => e.toLowerCase().includes('weeklyfeedback')) || 'WeeklyFeedback';
-        } else if (strVal.includes('task')) {
-          targetEntity = availableEntities.find(e => e.toLowerCase().includes('task')) || 'TaskManagement';
-        } else if (strVal.includes('qc')) {
-          targetEntity = availableEntities.find(e => e.toLowerCase().includes('qc')) || 'QCTutor';
+        // Tentukan tabel Supabase berdasarkan nilai modul
+        if (modVal === 'student_feedback' || modVal.includes('student')) {
+          tableName = 'FeedbackRecord';
+        } else if (modVal === 'weekly_feedback' || modVal.includes('weekly')) {
+          tableName = 'WeeklyFeedback';
         }
 
-        // 3. Eksekusi pemanggilan ke adapter Supabase
-        if (db.entities[targetEntity]) {
-          try {
-            records = await db.entities[targetEntity].list();
-          } catch (e) {
-            console.error(`Failed to fetch from ${targetEntity}:`, e);
-          }
-        }
+        if (tableName) {
+          let query = supabase.from(tableName).select('*');
 
-        // 4. Fallback jika masih kosong: coba panggil entitas apa saja yang memiliki data
-        if (!records.length) {
-          for (const entKey of availableEntities) {
-            try {
-              const res = await db.entities[entKey].list();
-              if (res && res.length > 0) {
-                records = res;
-                break;
+          // Jika scope 'filtered', terapkan filter yang sedang aktif
+          if (scope === 'filtered') {
+            if (filters.search) {
+              if (tableName === 'FeedbackRecord') {
+                query = query.or(`student_name.ilike.%${filters.search}%,class_code.ilike.%${filters.search}%`);
+              } else {
+                query = query.or(`class_name.ilike.%${filters.search}%,class_code.ilike.%${filters.search}%,tutor_name.ilike.%${filters.search}%`);
               }
-            } catch (e) {}
+            }
+            if (filters.tutor_id && filters.tutor_id !== 'all') {
+              query = query.eq('tutor_id', filters.tutor_id);
+            }
+            if (filters.status && filters.status !== 'all' && tableName === 'WeeklyFeedback') {
+              query = query.eq('status', filters.status);
+            }
+          }
+
+          const { data, error } = await query;
+          if (error && error.code !== 'PGRST116') {
+            console.error(`Error fetching from ${tableName}:`, error.message);
+          } else {
+            records = data || [];
           }
         }
 
-        // 5. Unduh file jika data berhasil didapatkan
         if (records && records.length > 0) {
           totalRecords += records.length;
-          const label = modules.find((m) => m.value === modVal)?.label || 'Export';
+          const label = modules.find((m) => m.value === modVal)?.label || tableName;
           const fileName = `${label.replace(/\s+/g, '_')}_${Date.now()}.csv`;
           downloadCSV(records, fileName);
         }
