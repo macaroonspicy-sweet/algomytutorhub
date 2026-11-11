@@ -16,7 +16,7 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
 
   React.useEffect(() => {
     if (open) {
-      const initialVal = defaultModule || (modules[0]?.value ? modules[0].value : 'weekly_feedback');
+      const initialVal = defaultModule || (modules[0]?.value ? modules[0].value : 'student_feedback');
       setSelected([initialVal]);
       setScope('all');
     }
@@ -37,11 +37,10 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
       let totalRecords = 0;
 
       for (const rawItem of selected) {
-        // Mendapatkan string value dari modul terlepas dari bentuk tipe datanya
         const modVal = typeof rawItem === 'object' && rawItem !== null ? rawItem.value : String(rawItem);
-        let tableName = '';
-
         const strVal = modVal.toLowerCase();
+        
+        let tableName = '';
         if (strVal.includes('student') || strVal.includes('record')) {
           tableName = 'FeedbackRecord';
         } else if (strVal.includes('weekly') || strVal.includes('class')) {
@@ -50,28 +49,48 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
 
         if (!tableName) continue;
 
-        // Inisialisasi Query dasar Supabase
         let query = supabase.from(tableName).select('*');
 
-        // HANYA terapkan filter jika scope spesifik memilih 'filtered'
-        if (scope === 'filtered') {
-          if (filters.search && filters.search.trim() !== '') {
+        // TERAPKAN FILTER HANYA JIKA SCOPE === 'filtered'
+        if (scope === 'filtered' && filters) {
+          // 1. Filter Pencarian (Search)
+          if (filters.search && typeof filters.search === 'string' && filters.search.trim() !== '') {
             const q = filters.search.trim();
             if (tableName === 'FeedbackRecord') {
-              query = query.or(`student_name.ilike.%${q}%,class_code.ilike.%${q}%`);
+              query = query.or(`student_name.ilike.%${q}%,class_code.ilike.%${q}%,course_name.ilike.%${q}%`);
             } else {
-              query = query.or(`class_name.ilike.%${q}%,class_code.ilike.%${q}%,tutor_name.ilike.%${q}%`);
+              query = query.or(`class_name.ilike.%${q}%,class_code.ilike.%${q}%,tutor_name.ilike.%${q}%,course_name.ilike.%${q}%`);
             }
           }
-          if (filters.tutor_id && filters.tutor_id !== 'all') {
+
+          // 2. Filter Tutor ID (Hanya jika bernilai eksplisit dan bukan 'all')
+          if (filters.tutor_id && filters.tutor_id !== 'all' && filters.tutor_id !== '') {
             query = query.eq('tutor_id', filters.tutor_id);
           }
-          if (filters.status && filters.status !== 'all' && tableName === 'WeeklyFeedback') {
+
+          // 3. Filter Status (Khusus WeeklyFeedback)
+          if (tableName === 'WeeklyFeedback' && filters.status && filters.status !== 'all' && filters.status !== '') {
             query = query.eq('status', filters.status);
+          }
+
+          // 4. Filter Mingguan (Khusus WeeklyFeedback)
+          if (tableName === 'WeeklyFeedback' && filters.week_start && filters.week_start !== 'all' && filters.week_start !== '') {
+            query = query.gte('week_start_date', filters.week_start);
+          }
+
+          // 5. Filter Bulan (Khusus FeedbackRecord jika ada)
+          if (tableName === 'FeedbackRecord' && filters.month && filters.month !== 'all' && filters.month !== '') {
+            query = query.ilike('created_date', `${filters.month}%`);
           }
         }
 
-        // Jalankan Query
+        // Ordering
+        if (tableName === 'FeedbackRecord') {
+          query = query.order('created_date', { ascending: false });
+        } else {
+          query = query.order('created_at', { ascending: false });
+        }
+
         const { data, error } = await query;
 
         if (error) {
@@ -85,7 +104,6 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
           const label = matchedMod?.label || tableName;
           const fileName = `${label.replace(/\s+/g, '_')}_${Date.now()}.csv`;
 
-          // Buat Header & Rows untuk CSV
           const headers = Object.keys(data[0]);
           const rows = data.map((item) => headers.map((key) => item[key]));
 
