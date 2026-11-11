@@ -7,44 +7,23 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Download, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { downloadCsv } from '@/lib/exportUtils';
 
 export default function ExportDialog({ open, onOpenChange, modules = [], filters = {}, defaultModule }) {
-  const [selected, setSelected] = useState([defaultModule || modules[0]?.value]);
+  const [selected, setSelected] = useState([]);
   const [scope, setScope] = useState('all');
   const [loading, setLoading] = useState(false);
 
   React.useEffect(() => {
     if (open) {
-      setSelected([defaultModule || modules[0]?.value]);
+      const initialVal = defaultModule || (modules[0]?.value ? modules[0].value : 'weekly_feedback');
+      setSelected([initialVal]);
       setScope('all');
     }
   }, [open, defaultModule, modules]);
 
   const toggle = (value) => {
     setSelected((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
-  };
-
-  const downloadCSV = (data, filename) => {
-    if (!data || !data.length) return;
-    const headers = Object.keys(data[0]);
-    const csvRows = [
-      headers.join(','),
-      ...data.map((row) =>
-        headers
-          .map((fieldName) => {
-            const val = row[fieldName] !== null && row[fieldName] !== undefined ? row[fieldName] : '';
-            return `"${String(val).replace(/"/g, '""')}"`;
-          })
-          .join(',')
-      )
-    ];
-    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   const handleExport = async () => {
@@ -57,50 +36,60 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
     try {
       let totalRecords = 0;
 
-      for (const modVal of selected) {
-        let records = [];
+      for (const rawItem of selected) {
+        // Mendapatkan string value dari modul terlepas dari bentuk tipe datanya
+        const modVal = typeof rawItem === 'object' && rawItem !== null ? rawItem.value : String(rawItem);
         let tableName = '';
 
-        // Tentukan tabel Supabase berdasarkan nilai modul
-        if (modVal === 'student_feedback' || modVal.includes('student')) {
+        const strVal = modVal.toLowerCase();
+        if (strVal.includes('student') || strVal.includes('record')) {
           tableName = 'FeedbackRecord';
-        } else if (modVal === 'weekly_feedback' || modVal.includes('weekly')) {
+        } else if (strVal.includes('weekly') || strVal.includes('class')) {
           tableName = 'WeeklyFeedback';
         }
 
-        if (tableName) {
-          let query = supabase.from(tableName).select('*');
+        if (!tableName) continue;
 
-          // Jika scope 'filtered', terapkan filter yang sedang aktif
-          if (scope === 'filtered') {
-            if (filters.search) {
-              if (tableName === 'FeedbackRecord') {
-                query = query.or(`student_name.ilike.%${filters.search}%,class_code.ilike.%${filters.search}%`);
-              } else {
-                query = query.or(`class_name.ilike.%${filters.search}%,class_code.ilike.%${filters.search}%,tutor_name.ilike.%${filters.search}%`);
-              }
-            }
-            if (filters.tutor_id && filters.tutor_id !== 'all') {
-              query = query.eq('tutor_id', filters.tutor_id);
-            }
-            if (filters.status && filters.status !== 'all' && tableName === 'WeeklyFeedback') {
-              query = query.eq('status', filters.status);
+        // Inisialisasi Query dasar Supabase
+        let query = supabase.from(tableName).select('*');
+
+        // HANYA terapkan filter jika scope spesifik memilih 'filtered'
+        if (scope === 'filtered') {
+          if (filters.search && filters.search.trim() !== '') {
+            const q = filters.search.trim();
+            if (tableName === 'FeedbackRecord') {
+              query = query.or(`student_name.ilike.%${q}%,class_code.ilike.%${q}%`);
+            } else {
+              query = query.or(`class_name.ilike.%${q}%,class_code.ilike.%${q}%,tutor_name.ilike.%${q}%`);
             }
           }
-
-          const { data, error } = await query;
-          if (error && error.code !== 'PGRST116') {
-            console.error(`Error fetching from ${tableName}:`, error.message);
-          } else {
-            records = data || [];
+          if (filters.tutor_id && filters.tutor_id !== 'all') {
+            query = query.eq('tutor_id', filters.tutor_id);
+          }
+          if (filters.status && filters.status !== 'all' && tableName === 'WeeklyFeedback') {
+            query = query.eq('status', filters.status);
           }
         }
 
-        if (records && records.length > 0) {
-          totalRecords += records.length;
-          const label = modules.find((m) => m.value === modVal)?.label || tableName;
+        // Jalankan Query
+        const { data, error } = await query;
+
+        if (error) {
+          console.error(`[Supabase Export Error] Table ${tableName}:`, error.message);
+          continue;
+        }
+
+        if (data && data.length > 0) {
+          totalRecords += data.length;
+          const matchedMod = modules.find((m) => m.value === modVal);
+          const label = matchedMod?.label || tableName;
           const fileName = `${label.replace(/\s+/g, '_')}_${Date.now()}.csv`;
-          downloadCSV(records, fileName);
+
+          // Buat Header & Rows untuk CSV
+          const headers = Object.keys(data[0]);
+          const rows = data.map((item) => headers.map((key) => item[key]));
+
+          downloadCsv(headers, rows, fileName);
         }
       }
 
@@ -113,7 +102,7 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
       toast.success('Export completed', { description: `${totalRecords} record(s) downloaded` });
       onOpenChange(false);
     } catch (err) {
-      console.error('[Export Error]:', err);
+      console.error('[Export Execution Error]:', err);
       toast.error('Export failed', { description: err.message || 'Error generating export file' });
     } finally {
       setLoading(false);
@@ -136,7 +125,10 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
             <div className="space-y-2">
               {modules.map((module) => (
                 <label key={module.value} className="flex items-center gap-3 bg-secondary/50 border border-border rounded-xl px-3 py-2.5 cursor-pointer">
-                  <Checkbox checked={selected.includes(module.value)} onCheckedChange={() => toggle(module.value)} />
+                  <Checkbox
+                    checked={selected.includes(module.value)}
+                    onCheckedChange={() => toggle(module.value)}
+                  />
                   <div>
                     <div className="text-sm font-medium text-foreground">{module.label}</div>
                     {module.hint && <div className="text-xs text-muted-foreground">{module.hint}</div>}
