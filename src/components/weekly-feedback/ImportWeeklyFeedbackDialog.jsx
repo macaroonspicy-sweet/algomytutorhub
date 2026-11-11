@@ -27,7 +27,6 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         
-        // Convert sheet ke JSON
         const rawJson = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
         if (!rawJson || rawJson.length === 0) {
@@ -36,7 +35,6 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
           return;
         }
 
-        // Mapping nama kolom sesuai template
         const mappedData = rawJson.map((row) => ({
           class_code: String(row['Class Code'] || row['class_code'] || '').trim(),
           class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
@@ -83,18 +81,20 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
         created_at: new Date().toISOString()
       }));
 
-      const { error } = await supabase.from('WeeklyFeedback').insert(recordsToInsert);
+      // Mengirim data ke tabel yang benar: WeeklyFeedbackAssignment (dengan fallback jika ada variasi nama)
+      let insertRes = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
 
-      if (error) throw error;
+      if (insertRes.error && insertRes.error.message.includes('schema cache')) {
+        insertRes = await supabase.from('WeeklyFeedback').insert(recordsToInsert);
+      }
+
+      if (insertRes.error) throw insertRes.error;
 
       toast.success('Import Successful', {
         description: `Berhasil mengimpor ${recordsToInsert.length} data weekly feedback.`
       });
 
-      // Reset state & refresh data
-      setFile(null);
-      setPreviewData([]);
-      setErrorMsg('');
+      resetState();
       onOpenChange(false);
       if (onImported) onImported();
     } catch (err) {
