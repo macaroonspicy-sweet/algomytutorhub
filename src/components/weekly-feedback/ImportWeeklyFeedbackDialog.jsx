@@ -35,17 +35,23 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
           return;
         }
 
-        const mappedData = rawJson.map((row) => ({
-          class_code: String(row['Class Code'] || row['class_code'] || '').trim(),
-          class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
-          course_name: String(row['Course Name'] || row['course_name'] || '').trim(),
-          tutor_name: String(row['Tutor Name'] || row['tutor_name'] || '').trim(),
-          tutor_id: String(row['Tutor ID'] || row['tutor_id'] || '').trim(),
-          week_start_date: String(row['Week Start'] || row['week_start_date'] || '').trim(),
-          week_end_date: String(row['Week End'] || row['week_end_date'] || '').trim(),
-          status: String(row['Status'] || row['status'] || 'pending').toLowerCase().trim(),
-          notes: String(row['Notes'] || row['notes'] || '').trim(),
-        })).filter(item => item.class_code || item.class_name);
+        const mappedData = rawJson.map((row) => {
+          const rawCode = row['Class Code'] || row['class_code'] || '';
+          // Konversi class_code ke integer jika berupa angka murni, atau simpan null jika ada teks
+          const parsedCode = !isNaN(rawCode) && rawCode !== '' ? parseInt(rawCode, 10) : null;
+
+          return {
+            class_code: parsedCode,
+            class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
+            course_name: String(row['Course Name'] || row['course_name'] || '').trim(),
+            tutor_name: String(row['Tutor Name'] || row['tutor_name'] || '').trim(),
+            tutor_id: String(row['Tutor ID'] || row['tutor_id'] || '').trim(),
+            week_start_date: String(row['Week Start'] || row['week_start_date'] || '').trim(),
+            week_end_date: String(row['Week End'] || row['week_end_date'] || '').trim(),
+            status: String(row['Status'] || row['status'] || 'pending').toLowerCase().trim(),
+            notes: String(row['Notes'] || row['notes'] || '').trim(),
+          };
+        }).filter(item => item.class_name);
 
         if (mappedData.length === 0) {
           setErrorMsg('Tidak ada baris data kelas yang valid ditemukan di dalam file.');
@@ -78,10 +84,10 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
         week_end_date: item.week_end_date || new Date().toISOString().slice(0, 10),
         status: ['pending', 'completed', 'overdue'].includes(item.status) ? item.status : 'pending',
         notes: item.notes,
-        created_at: new Date().toISOString()
+        created_date: new Date().toISOString(),
+        updated_date: new Date().toISOString()
       }));
 
-      // Direct insert ke tabel Supabase yang benar: WeeklyFeedbackAssignment
       const { error } = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
 
       if (error) throw error;
