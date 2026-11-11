@@ -37,7 +37,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
 
         const mappedData = rawJson.map((row) => {
           const rawCode = row['Class Code'] || row['class_code'] || '';
-          // Konversi class_code ke integer jika berupa angka murni, atau simpan null jika ada teks
+          // Tukar class_code ke integer jika nombor, atau set null jika string biasa
           const parsedCode = !isNaN(rawCode) && rawCode !== '' ? parseInt(rawCode, 10) : null;
 
           return {
@@ -74,6 +74,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
 
     setLoading(true);
     try {
+      // Menggunakan created_date & updated_date mengikut DDL Supabase (tanpa created_at)
       const recordsToInsert = previewData.map((item) => ({
         class_code: item.class_code,
         class_name: item.class_name,
@@ -85,7 +86,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
         status: ['pending', 'completed', 'overdue'].includes(item.status) ? item.status : 'pending',
         notes: item.notes,
         created_date: new Date().toISOString(),
-        updated_date: new Date().toISOString()
+        updated_date: new Date().toISOString(),
       }));
 
       const { error } = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
