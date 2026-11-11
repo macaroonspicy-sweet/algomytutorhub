@@ -45,13 +45,14 @@ export default function WeeklyFeedback() {
   const loadAll = async () => {
     setLoading(true);
     try {
+      // Mengambil data dari tabel WeeklyFeedbackAssignment
       const { data: assignmentsData, error: assignErr } = await supabase
-        .from('WeeklyFeedback')
+        .from('WeeklyFeedbackAssignment')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (assignErr && assignErr.code !== 'PGRST116') {
-        console.warn('WeeklyFeedback fetch warning:', assignErr.message);
+      if (assignErr) {
+        console.warn('WeeklyFeedbackAssignment fetch warning:', assignErr.message);
       }
 
       const { data: userData } = await supabase
@@ -106,7 +107,7 @@ export default function WeeklyFeedback() {
     setBusyId(item.id);
     try {
       const { error } = await supabase
-        .from('WeeklyFeedback')
+        .from('WeeklyFeedbackAssignment')
         .update({ 
           status: 'completed',
           completed_by_name: currentUser?.full_name || currentUser?.email || 'Tutor'
@@ -126,7 +127,7 @@ export default function WeeklyFeedback() {
   const confirmDelete = async () => {
     try {
       const { error } = await supabase
-        .from('WeeklyFeedback')
+        .from('WeeklyFeedbackAssignment')
         .delete()
         .eq('id', deleteTarget);
 

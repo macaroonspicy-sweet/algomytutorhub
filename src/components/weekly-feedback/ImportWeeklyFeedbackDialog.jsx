@@ -81,14 +81,10 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
         created_at: new Date().toISOString()
       }));
 
-      // Mengirim data ke tabel yang benar: WeeklyFeedbackAssignment (dengan fallback jika ada variasi nama)
-      let insertRes = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
+      // Direct insert ke tabel Supabase yang benar: WeeklyFeedbackAssignment
+      const { error } = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
 
-      if (insertRes.error && insertRes.error.message.includes('schema cache')) {
-        insertRes = await supabase.from('WeeklyFeedback').insert(recordsToInsert);
-      }
-
-      if (insertRes.error) throw insertRes.error;
+      if (error) throw error;
 
       toast.success('Import Successful', {
         description: `Berhasil mengimpor ${recordsToInsert.length} data weekly feedback.`
