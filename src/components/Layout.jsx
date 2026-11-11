@@ -21,7 +21,7 @@ const navItems = [
     children: [
       { label: 'QC Records', path: '/admin/qc-tutor', rbac: 'qc_records' },
       { label: 'Monthly Evaluation', path: '/admin/qc-monthly', rbac: 'qc_monthly' },
-      { label: 'QC Submissions', path: '/qc/submissions', rbac: 'qc_submissions' },
+      { label: 'QC Submissions', path: '/qc/submissions' }, // rbac dihapus agar langsung tampil
     ]
   },
   {
