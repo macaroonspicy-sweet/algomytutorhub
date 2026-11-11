@@ -63,9 +63,14 @@ export default function QCSubmissions() {
     loadSubmissions();
   }, [filters.status]);
 
-  // Toggle status between 'evaluated' and 'pending' or 'submitted'
+  // Toggle status antara 'evaluated' dan 'submitted' (atau status sebelumnya)
   const toggleEvaluatedStatus = async (item) => {
-    const newStatus = item.status === 'evaluated' ? 'submitted' : 'evaluated';
+    // Jika saat ini sudah evaluated, kembalikan ke submitted (atau pending jika ada recording_url kosong).
+    // Jika belum evaluated, ubah jadi evaluated.
+    const newStatus = item.status === 'evaluated' 
+      ? (item.recording_url ? 'submitted' : 'pending') 
+      : 'evaluated';
+
     try {
       const { error } = await supabase
         .from('QCSubmission')
@@ -73,7 +78,7 @@ export default function QCSubmissions() {
         .eq('id', item.id);
 
       if (error) throw error;
-      toast.success(`Status diubah menjadi: ${newStatus}`);
+      toast.success(`Status berhasil diubah menjadi: ${newStatus}`);
       loadSubmissions();
     } catch (err) {
       toast.error('Gagal mengubah status', { description: err.message });
@@ -136,7 +141,8 @@ export default function QCSubmissions() {
   const summary = {
     total: submissions.length,
     evaluated: submissions.filter(s => s.status === 'evaluated').length,
-    pending: submissions.filter(s => s.status === 'pending' || !s.status || s.status === 'submitted').length,
+    submitted: submissions.filter(s => s.status === 'submitted').length,
+    pending: submissions.filter(s => s.status === 'pending' || !s.status).length,
   };
 
   return (
@@ -150,10 +156,11 @@ export default function QCSubmissions() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-3">
         <StatCard label="Total Submissions" value={summary.total} icon={CheckCircle2} tone="bg-chart-3/70" />
         <StatCard label="Sudah Dinilai (Evaluated)" value={summary.evaluated} icon={CheckSquare} tone="bg-emerald-600/70" />
-        <StatCard label="Belum Dinilai / Pending" value={summary.pending} icon={Clock} tone="bg-amber-600/70" />
+        <StatCard label="Submitted (Tutor Kirim)" value={summary.submitted} icon={Clock} tone="bg-primary/70" />
+        <StatCard label="Pending (Belum Kirim)" value={summary.pending} icon={Clock} tone="bg-amber-600/70" />
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
@@ -204,7 +211,7 @@ export default function QCSubmissions() {
                     <td className="px-4 py-3 text-center">
                       <button 
                         onClick={() => toggleEvaluatedStatus(s)}
-                        title="Klik untuk tandai sudah/belum dinilai"
+                        title="Klik untuk centang sudah dinilai (Evaluated)"
                         className="p-1 rounded hover:bg-secondary transition-colors inline-flex items-center justify-center text-primary"
                       >
                         {s.status === 'evaluated' ? (
@@ -222,11 +229,11 @@ export default function QCSubmissions() {
                       <Badge variant="outline" className={
                         s.status === 'evaluated' 
                           ? 'border-emerald-500/40 text-emerald-400 text-[10px]' 
-                          : s.status === 'pending'
-                          ? 'border-amber-500/40 text-amber-400 text-[10px]'
-                          : 'border-chart-3/40 text-chart-3 text-[10px]'
+                          : s.status === 'submitted'
+                          ? 'border-primary/40 text-primary text-[10px]'
+                          : 'border-amber-500/40 text-amber-400 text-[10px]'
                       }>
-                        {s.status === 'evaluated' ? 'Evaluated' : (s.status || 'Submitted')}
+                        {s.status === 'evaluated' ? 'Evaluated' : (s.status === 'submitted' ? 'Submitted' : 'Pending')}
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right">

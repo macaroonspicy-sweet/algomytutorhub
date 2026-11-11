@@ -49,7 +49,7 @@ export default function QCSubmissionPanel() {
         period_year: formData.period_year,
         recording_url: formData.recording_url.trim(),
         notes: formData.notes.trim() || null,
-        status: 'pending',
+        status: 'submitted',
         created_date: new Date().toISOString(),
         updated_date: new Date().toISOString(),
       };
