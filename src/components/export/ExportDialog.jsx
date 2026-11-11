@@ -1,207 +1,182 @@
 import React, { useState } from 'react';
+import * as XLSX from 'xlsx';
 import { supabase } from '@/lib/supabaseClient';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Loader2, Download, FileSpreadsheet } from 'lucide-react';
+import { Loader2, Upload, FileSpreadsheet, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
-import { downloadCsv } from '@/lib/exportUtils';
 
-export default function ExportDialog({ open, onOpenChange, modules = [], filters = {}, defaultModule }) {
-  const [selected, setSelected] = useState([]);
-  const [scope, setScope] = useState('all');
+export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImported }) {
+  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [previewData, setPreviewData] = useState([]);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  React.useEffect(() => {
-    if (open) {
-      const initialVal = defaultModule || (modules[0]?.value ? modules[0].value : 'student_feedback');
-      setSelected([initialVal]);
-      setScope('all');
-    }
-  }, [open, defaultModule, modules]);
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (!selectedFile) return;
 
-  const toggle = (value) => {
-    setSelected((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+    setErrorMsg('');
+    setFile(selectedFile);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        
+        const rawJson = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+        if (!rawJson || rawJson.length === 0) {
+          setErrorMsg('File Excel kosong atau format tidak sesuai.');
+          setPreviewData([]);
+          return;
+        }
+
+        const mappedData = rawJson.map((row) => ({
+          class_code: String(row['Class Code'] || row['class_code'] || '').trim(),
+          class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
+          course_name: String(row['Course Name'] || row['course_name'] || '').trim(),
+          tutor_name: String(row['Tutor Name'] || row['tutor_name'] || '').trim(),
+          tutor_id: String(row['Tutor ID'] || row['tutor_id'] || '').trim(),
+          week_start_date: String(row['Week Start'] || row['week_start_date'] || '').trim(),
+          week_end_date: String(row['Week End'] || row['week_end_date'] || '').trim(),
+          status: String(row['Status'] || row['status'] || 'pending').toLowerCase().trim(),
+          notes: String(row['Notes'] || row['notes'] || '').trim(),
+        })).filter(item => item.class_code || item.class_name);
+
+        if (mappedData.length === 0) {
+          setErrorMsg('Tidak ada baris data kelas yang valid ditemukan di dalam file.');
+        } else {
+          setPreviewData(mappedData);
+        }
+      } catch (err) {
+        console.error('Error parsing Excel:', err);
+        setErrorMsg('Gagal membaca file Excel. Pastikan format file .xlsx valid.');
+      }
+    };
+    reader.readAsArrayBuffer(selectedFile);
   };
 
-  const handleExport = async () => {
-    if (!selected.length) {
-      toast.error('Choose at least one module to export');
+  const handleConfirmImport = async () => {
+    if (!previewData.length) {
+      toast.error('No valid records to import');
       return;
     }
+
     setLoading(true);
-
     try {
-      let totalRecords = 0;
+      const recordsToInsert = previewData.map((item) => ({
+        class_code: item.class_code,
+        class_name: item.class_name,
+        course_name: item.course_name,
+        tutor_name: item.tutor_name,
+        tutor_id: item.tutor_id || null,
+        week_start_date: item.week_start_date || new Date().toISOString().slice(0, 10),
+        week_end_date: item.week_end_date || new Date().toISOString().slice(0, 10),
+        status: ['pending', 'completed', 'overdue'].includes(item.status) ? item.status : 'pending',
+        notes: item.notes,
+        created_at: new Date().toISOString()
+      }));
 
-      for (const rawItem of selected) {
-        const modVal = typeof rawItem === 'object' && rawItem !== null ? rawItem.value : String(rawItem);
-        const strVal = modVal.toLowerCase();
-        
-        let tableName = '';
-        if (strVal.includes('student') || strVal.includes('record')) {
-          tableName = 'FeedbackRecord';
-        } else if (strVal.includes('weekly') || strVal.includes('class')) {
-          tableName = 'WeeklyFeedback';
-        }
+      // Coba insert ke WeeklyFeedback dulu, jika tidak ada fallback ke weekly_feedback
+      let insertRes = await supabase.from('WeeklyFeedback').insert(recordsToInsert);
 
-        if (!tableName) continue;
-
-        let query = supabase.from(tableName).select('*');
-
-        // TERAPKAN FILTER SAAT USER MEMILIH SCOPE 'filtered'
-        if (scope === 'filtered' && filters) {
-          // 1. Search Query
-          if (filters.search && typeof filters.search === 'string' && filters.search.trim() !== '') {
-            const q = filters.search.trim();
-            if (tableName === 'FeedbackRecord') {
-              query = query.or(`student_name.ilike.%${q}%,class_code.ilike.%${q}%,course_name.ilike.%${q}%`);
-            } else {
-              query = query.or(`class_name.ilike.%${q}%,class_code.ilike.%${q}%,tutor_name.ilike.%${q}%,course_name.ilike.%${q}%`);
-            }
-          }
-
-          // 2. Filter Tutor
-          const tutorId = filters.tutor_id || filters.tutor;
-          if (tutorId && tutorId !== 'all' && tutorId !== '') {
-            query = query.eq('tutor_id', tutorId);
-          }
-
-          // 3. Filter Status (WeeklyFeedback)
-          if (tableName === 'WeeklyFeedback' && filters.status && filters.status !== 'all' && filters.status !== '') {
-            query = query.eq('status', filters.status);
-          }
-
-          // 4. Filter Week (WeeklyFeedback)
-          const weekVal = filters.week || filters.week_start;
-          if (tableName === 'WeeklyFeedback' && weekVal && weekVal !== 'all' && weekVal !== '') {
-            query = query.gte('week_start_date', weekVal);
-          }
-
-          // 5. Filter Course
-          const courseVal = filters.course || filters.course_name;
-          if (courseVal && courseVal !== 'all' && courseVal !== '') {
-            query = query.eq('course_name', courseVal);
-          }
-
-          // 6. Filter Month & Year (FeedbackRecord)
-          if (tableName === 'FeedbackRecord') {
-            if (filters.record_month && filters.record_month !== 'all' && filters.record_month !== '') {
-              query = query.eq('record_month', parseInt(filters.record_month));
-            }
-            if (filters.record_year && filters.record_year !== 'all' && filters.record_year !== '') {
-              query = query.eq('record_year', parseInt(filters.record_year));
-            }
-            if (filters.month && filters.month !== 'all' && filters.month !== '') {
-              query = query.eq('month', parseInt(filters.month));
-            }
-          }
-        }
-
-        // Urutkan data berdasarkan waktu terbaru
-        if (tableName === 'FeedbackRecord') {
-          query = query.order('created_date', { ascending: false });
-        } else {
-          query = query.order('created_at', { ascending: false });
-        }
-
-        const { data, error } = await query;
-
-        if (error) {
-          console.error(`[Supabase Export Error] Table ${tableName}:`, error.message);
-          continue;
-        }
-
-        if (data && data.length > 0) {
-          totalRecords += data.length;
-          const matchedMod = modules.find((m) => m.value === modVal);
-          const label = matchedMod?.label || tableName;
-          const fileName = `${label.replace(/\s+/g, '_')}_${Date.now()}.csv`;
-
-          const headers = Object.keys(data[0]);
-          const rows = data.map((item) => headers.map((key) => item[key]));
-
-          downloadCsv(headers, rows, fileName);
-        }
+      if (insertRes.error && insertRes.error.message.includes('schema cache')) {
+        insertRes = await supabase.from('weekly_feedback').insert(recordsToInsert);
       }
 
-      if (totalRecords === 0) {
-        toast.error('No records found for the applied filters');
-        setLoading(false);
-        return;
-      }
+      if (insertRes.error) throw insertRes.error;
 
-      toast.success('Export completed', { description: `${totalRecords} record(s) downloaded` });
+      toast.success('Import Successful', {
+        description: `Berhasil mengimpor ${recordsToInsert.length} data weekly feedback.`
+      });
+
+      resetState();
       onOpenChange(false);
+      if (onImported) onImported();
     } catch (err) {
-      console.error('[Export Execution Error]:', err);
-      toast.error('Export failed', { description: err.message || 'Error generating export file' });
+      console.error('Import Error:', err);
+      toast.error('Import Failed', { description: err.message || 'Gagal menyimpan data ke database.' });
     } finally {
       setLoading(false);
     }
   };
 
+  const resetState = () => {
+    setFile(null);
+    setPreviewData([]);
+    setErrorMsg('');
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) resetState(); onOpenChange(v); }}>
       <DialogContent className="bg-card border-border max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
-            <FileSpreadsheet className="w-5 h-5 text-chart-3" /> Export Data
+            <FileSpreadsheet className="w-5 h-5 text-chart-3" /> Import weekly class feedback
           </DialogTitle>
-          <DialogDescription>Download records you are authorized to access, across every page.</DialogDescription>
+          <DialogDescription>
+            Upload a filled .xlsx file — nothing is saved until you confirm.
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5">
-          <div className="space-y-2">
-            <Label className="text-sm text-foreground/80">Modules</Label>
-            <div className="space-y-2">
-              {modules.map((module) => (
-                <label key={module.value} className="flex items-center gap-3 bg-secondary/50 border border-border rounded-xl px-3 py-2.5 cursor-pointer">
-                  <Checkbox
-                    checked={selected.includes(module.value)}
-                    onCheckedChange={() => toggle(module.value)}
-                  />
-                  <div>
-                    <div className="text-sm font-medium text-foreground">{module.label}</div>
-                    {module.hint && <div className="text-xs text-muted-foreground">{module.hint}</div>}
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
+        <div className="space-y-4">
+          {!file ? (
+            <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-2xl p-8 cursor-pointer hover:bg-secondary/40 transition-colors">
+              <Upload className="w-8 h-8 text-muted-foreground mb-2" />
+              <span className="text-sm font-medium text-foreground">Choose an .xlsx file</span>
+              <span className="text-xs text-muted-foreground mt-1">Weekly_Student_Feedback_Template.xlsx</span>
+              <input
+                type="file"
+                accept=".xlsx, .xls"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </label>
+          ) : (
+            <div className="bg-secondary/50 border border-border rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" /> {file.name}
+                </div>
+                <Button variant="ghost" size="sm" onClick={resetState} className="h-7 text-xs text-muted-foreground hover:text-foreground">
+                  Change File
+                </Button>
+              </div>
 
-          <div className="space-y-2">
-            <Label className="text-sm text-foreground/80">Scope</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { value: 'all', label: 'All records' },
-                { value: 'filtered', label: 'Current filters' }
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setScope(option.value)}
-                  className={cn(
-                    'rounded-xl border px-3 py-2.5 text-sm font-medium transition-all',
-                    scope === option.value ? 'border-primary bg-primary/15 text-primary' : 'border-border text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {option.label}
-                </button>
-              ))}
+              {previewData.length > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  Found <strong className="text-foreground">{previewData.length}</strong> valid assignment row(s) ready to import.
+                </div>
+              )}
             </div>
-            {scope === 'filtered' && (
-              <p className="text-xs text-muted-foreground">Only records matching the filters currently applied on this page are exported.</p>
-            )}
-          </div>
+          )}
 
-          <div className="flex justify-end gap-3 pt-1">
-            <Button variant="outline" onClick={() => onOpenChange(false)} className="border-border">Cancel</Button>
-            <Button onClick={handleExport} disabled={loading} className="bg-chart-3/90 hover:bg-chart-3 text-white gap-2">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              Export
+          {errorMsg && (
+            <div className="bg-destructive/15 border border-destructive/30 rounded-xl p-3 flex items-start gap-2 text-xs text-destructive">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            Classes are taken from your existing class records; a class that is not listed yet is added automatically. Existing assignments are never overwritten.
+          </p>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="outline" onClick={() => { resetState(); onOpenChange(false); }} className="border-border">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleConfirmImport}
+              disabled={loading || !previewData.length}
+              className="bg-primary text-primary-foreground gap-2"
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              Import Assignments
             </Button>
           </div>
         </div>
