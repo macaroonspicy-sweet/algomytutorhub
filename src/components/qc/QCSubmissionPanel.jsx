@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Link as LinkIcon, Calendar, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { Send, Link as LinkIcon, Calendar, CheckCircle2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function QCSubmissionPanel() {
@@ -22,7 +22,7 @@ export default function QCSubmissionPanel() {
 
   const [formData, setFormData] = useState({
     submission_date: todayStr,
-    period_number: defaultPeriod,
+    period: defaultPeriod,
     period_month: currentMonth,
     period_year: currentYear,
     recording_url: '',
@@ -38,27 +38,30 @@ export default function QCSubmissionPanel() {
 
     setLoading(true);
     try {
+      // Mengirim data ke tabel public.QCSubmission sesuai skema DDL
       const payload = {
-        tutor_id: currentUser?.id,
+        tutor_id: currentUser?.id || null,
         tutor_name: currentUser?.full_name || currentUser?.name || 'Tutor',
         submission_date: formData.submission_date,
-        period_number: formData.period_number,
+        submitted_at: new Date().toISOString(),
+        period: formData.period,
         period_month: formData.period_month,
         period_year: formData.period_year,
         recording_url: formData.recording_url.trim(),
-        notes: formData.notes.trim(),
+        notes: formData.notes.trim() || null,
         status: 'pending',
         created_date: new Date().toISOString(),
+        updated_date: new Date().toISOString(),
       };
 
-      const { error } = await supabase.from('QCRecord').insert([payload]);
+      const { error } = await supabase.from('QCSubmission').insert([payload]);
       if (error) throw error;
 
       toast.success('QC submission sent successfully');
       setSubmitted(true);
       setFormData({
         submission_date: todayStr,
-        period_number: defaultPeriod,
+        period: defaultPeriod,
         period_month: currentMonth,
         period_year: currentYear,
         recording_url: '',
@@ -81,7 +84,7 @@ export default function QCSubmissionPanel() {
         </div>
         <div className="text-xs text-muted-foreground flex items-center gap-1.5 bg-secondary/60 px-3 py-1 rounded-full">
           <Calendar className="w-3.5 h-3.5 text-primary" />
-          <span>Assigned period: <strong>Period {formData.period_number} ({formData.period_number === 1 ? '1–15' : '16–31'}) · {formData.period_month}/{formData.period_year}</strong></span>
+          <span>Assigned period: <strong>Period {formData.period} ({formData.period === 1 ? '1–15' : '16–31'}) · {formData.period_month}/{formData.period_year}</strong></span>
         </div>
       </div>
 
