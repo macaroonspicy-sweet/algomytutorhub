@@ -77,7 +77,8 @@ const AuthenticatedApp = () => {
           <Route path="/categories/qc-aspects" element={<RbacRoute rbacKey="category_qc"><QCEvaluationAspectPage /></RbacRoute>} />
           <Route path="/student-feedback" element={<RbacRoute rbacKey="student_feedback"><StudentFeedback /></RbacRoute>} />
           <Route path="/weekly-feedback" element={<RbacRoute rbacKey="weekly_feedback"><WeeklyFeedback /></RbacRoute>} />
-          <Route path="/qc/submissions" element={<RbacRoute rbacKey="qc_submissions"><QCSubmissions /></RbacRoute>} />
+          {/* Diubah ke rbacKey="qc_records" agar role Team Leader dan QC Team dapat mengakses halaman ini */}
+          <Route path="/qc/submissions" element={<RbacRoute rbacKey="qc_records"><QCSubmissions /></RbacRoute>} />
           <Route path="/tasks" element={<RbacRoute rbacKey="task_management"><Tasks /></RbacRoute>} />
           <Route path="/categories/courses" element={<RbacRoute rbacKey="category_courses"><CoursesCategory /></RbacRoute>} />
 
