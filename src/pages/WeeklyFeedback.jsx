@@ -1,22 +1,20 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
-
 import React, { useEffect, useState } from 'react';
-
+import * as XLSX from 'xlsx';
+import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Search, Download, Upload, FileSpreadsheet, Loader2, Pencil, Trash2, Check, Filter } from 'lucide-react';
 import { toast } from 'sonner';
+
 import AssignmentFormDialog from '@/components/weekly-feedback/AssignmentFormDialog';
 import ImportWeeklyFeedbackDialog from '@/components/weekly-feedback/ImportWeeklyFeedbackDialog';
 import WeeklyFeedbackStats from '@/components/weekly-feedback/WeeklyFeedbackStats';
 import ExportDialog from '@/components/export/ExportDialog';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
 import Pagination from '@/components/ui/pagination';
-import { downloadBase64File } from '@/lib/exportUtils';
 import { assignmentStatus, fmtDate, FEEDBACK_STATUS_META, weekBounds } from '@/lib/workflowUtils';
-import { invokeService } from '@/lib/appApi';
 
 const ITEMS_PER_PAGE = 12;
 
@@ -47,23 +45,39 @@ export default function WeeklyFeedback() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [assignments, classList, users] = await Promise.all([
-        invokeService('weeklyFeedbackService', { action: 'list' }),
-        invokeService('weeklyFeedbackService', { action: 'classes' }),
-        db.entities.CustomUser.list(),
-      ]);
-      if (assignments.data?.error) throw new Error(assignments.data.error);
-      setItems(assignments.data.items || []);
-      setClasses(classList.data?.items || []);
-      setTutors((users || []).filter((u) => ['Tutor', 'Team Leader'].includes(u.role) && u.is_active !== false));
+      const { data: assignmentsData, error: assignErr } = await supabase
+        .from('WeeklyFeedback')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (assignErr && assignErr.code !== 'PGRST116') {
+        console.warn('WeeklyFeedback fetch warning:', assignErr.message);
+      }
+
+      const { data: userData } = await supabase
+        .from('CustomUser')
+        .select('*');
+
+      const fetchedAssignments = assignmentsData || [];
+      const fetchedUsers = userData || [];
+
+      setItems(fetchedAssignments);
+
+      const uniqueClassesList = [...new Set(fetchedAssignments.map(classKeyOf).filter(Boolean))];
+      setClasses(uniqueClassesList);
+
+      setTutors(fetchedUsers.filter((u) => ['Tutor', 'Team Leader'].includes(u.role) && u.is_active !== false));
     } catch (err) {
-      toast.error('Could not load weekly feedback', { description: err?.response?.data?.error || err.message });
+      console.error('Error loading weekly feedback:', err);
+      toast.error('Could not load weekly feedback', { description: err.message });
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { if (currentUser?.id) loadAll(); }, [currentUser?.id]);
+  useEffect(() => { 
+    if (currentUser?.id) loadAll(); 
+  }, [currentUser?.id]);
 
   const weeks = [...new Set(items.map((i) => i.week_start_date?.slice(0, 10)).filter(Boolean))].sort().reverse();
   const usedClasses = [...new Set(items.map(classKeyOf).filter(Boolean))].sort();
@@ -83,7 +97,7 @@ export default function WeeklyFeedback() {
 
   useEffect(() => { setPage(1); }, [search, week, classFilter, tutor, status]);
 
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE) || 1;
   const paginated = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
 
   const openCreate = () => { setEditing(null); setFormOpen(true); };
@@ -91,12 +105,19 @@ export default function WeeklyFeedback() {
   const markComplete = async (item) => {
     setBusyId(item.id);
     try {
-      const res = await invokeService('weeklyFeedbackService', { action: 'complete', id: item.id, status: 'completed' });
-      if (res.data?.error) throw new Error(res.data.error);
+      const { error } = await supabase
+        .from('WeeklyFeedback')
+        .update({ 
+          status: 'completed',
+          completed_by_name: currentUser?.full_name || currentUser?.email || 'Tutor'
+        })
+        .eq('id', item.id);
+
+      if (error) throw error;
       toast.success('Marked as completed');
       loadAll();
     } catch (err) {
-      toast.error('Could not update', { description: err?.response?.data?.error || err.message });
+      toast.error('Could not update status', { description: err.message });
     } finally {
       setBusyId('');
     }
@@ -104,24 +125,57 @@ export default function WeeklyFeedback() {
 
   const confirmDelete = async () => {
     try {
-      const res = await invokeService('weeklyFeedbackService', { action: 'delete', id: deleteTarget });
-      if (res.data?.error) throw new Error(res.data.error);
+      const { error } = await supabase
+        .from('WeeklyFeedback')
+        .delete()
+        .eq('id', deleteTarget);
+
+      if (error) throw error;
       toast.success('Assignment deleted');
       setDeleteTarget(null);
       loadAll();
     } catch (err) {
-      toast.error('Could not delete', { description: err?.response?.data?.error || err.message });
+      toast.error('Could not delete', { description: err.message });
     }
   };
 
-  const downloadTemplate = async () => {
+  // DOWNLOAD TEMPLATE INSTAN VIA SHEETJS
+  const downloadTemplate = () => {
     setTemplateLoading(true);
     try {
-      const res = await invokeService('weeklyFeedbackExcel', { action: 'template' });
-      if (res.data?.error) throw new Error(res.data.error);
-      downloadBase64File(res.data.base64, res.data.filename);
+      const sampleData = [
+        {
+          'Class Code': 'MY 1-1 VP 020',
+          'Course Name': 'Visual Programming',
+          'Tutor Name': currentUser?.full_name || 'Putri Nadia Ayu',
+          'Tutor ID': currentUser?.id || 'tutor_01',
+          'Week Start': '2026-11-09',
+          'Week End': '2026-11-15',
+          'Status': 'Pending',
+          'Notes': 'Sample note'
+        }
+      ];
+
+      const worksheet = XLSX.utils.json_to_sheet(sampleData);
+      worksheet['!cols'] = [
+        { wch: 18 },
+        { wch: 24 },
+        { wch: 22 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 28 }
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Weekly Feedback Template');
+
+      XLSX.writeFile(workbook, 'Weekly_Student_Feedback_Template.xlsx');
+      toast.success('Template downloaded successfully');
     } catch (err) {
-      toast.error('Could not build template', { description: err?.response?.data?.error || err.message });
+      console.error('Download template error:', err);
+      toast.error('Could not build template', { description: err.message });
     } finally {
       setTemplateLoading(false);
     }
@@ -192,7 +246,7 @@ export default function WeeklyFeedback() {
             <SelectTrigger className="lg:w-44"><SelectValue placeholder="Tutor" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All tutors</SelectItem>
-              {tutors.map((t) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+              {tutors.map((t) => <SelectItem key={t.id} value={t.id}>{t.full_name || t.name}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={status} onValueChange={setStatus}>
@@ -238,7 +292,7 @@ export default function WeeklyFeedback() {
               <tbody className="divide-y divide-border">
                 {paginated.map((item) => {
                   const st = assignmentStatus(item);
-                  const meta = FEEDBACK_STATUS_META[st];
+                  const meta = FEEDBACK_STATUS_META[st] || { label: st, className: 'bg-muted text-muted-foreground' };
                   return (
                     <tr key={item.id} className="hover:bg-secondary/30 transition-colors">
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
