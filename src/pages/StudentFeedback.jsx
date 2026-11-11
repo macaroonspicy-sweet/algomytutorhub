@@ -46,7 +46,6 @@ export default function StudentFeedback() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Fetch FeedbackRecord dari Supabase
       let feedbackQuery = supabase.from('FeedbackRecord').select('*');
       
       if (currentUser?.role === 'Tutor' || currentUser?.role === 'Feedback Team') {
@@ -56,7 +55,6 @@ export default function StudentFeedback() {
       const { data: recs, error: recsErr } = await feedbackQuery.order('created_date', { ascending: false });
       if (recsErr) throw recsErr;
 
-      // Fetch StudentPerformanceCategory dari Supabase
       const { data: perfs } = await supabase
         .from('StudentPerformanceCategory')
         .select('*')
@@ -79,7 +77,6 @@ export default function StudentFeedback() {
     }
   };
 
-  // Apply search and filters
   useEffect(() => {
     let filtered = [...allRecords];
 
@@ -188,7 +185,6 @@ export default function StudentFeedback() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Student Feedback</h1>
@@ -204,7 +200,6 @@ export default function StudentFeedback() {
         </div>
       </div>
 
-      {/* Search and Filters */}
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
@@ -317,7 +312,6 @@ export default function StudentFeedback() {
         )}
       </div>
 
-      {/* Records Grid */}
       {loading ? (
         <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
       ) : (
@@ -342,7 +336,6 @@ export default function StudentFeedback() {
             )}
           </div>
 
-          {/* Pagination UI */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-1.5 py-6">
               <Button
@@ -424,11 +417,12 @@ export default function StudentFeedback() {
           { value: 'weekly_feedback', label: 'Weekly Student Feedback', hint: 'Assignments, statuses and completion' },
         ]}
         filters={{
-          tutor_id: filterTutor !== 'all' ? filterTutor : '',
-          course: filterCourse !== 'all' ? filterCourse : '',
-          record_month: filterRecordMonth !== 'all' ? filterRecordMonth : '',
-          record_year: filterRecordYear !== 'all' ? filterRecordYear : '',
           search: searchQuery,
+          course: filterCourse,
+          tutor_id: filterTutor,
+          month: filterMonth,
+          record_month: filterRecordMonth,
+          record_year: filterRecordYear,
         }}
       />
 

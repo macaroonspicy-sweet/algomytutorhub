@@ -51,9 +51,9 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
 
         let query = supabase.from(tableName).select('*');
 
-        // TERAPKAN FILTER HANYA JIKA SCOPE === 'filtered'
+        // TERAPKAN FILTER SAAT USER MEMILIH SCOPE 'filtered'
         if (scope === 'filtered' && filters) {
-          // 1. Filter Pencarian (Search)
+          // 1. Search Query
           if (filters.search && typeof filters.search === 'string' && filters.search.trim() !== '') {
             const q = filters.search.trim();
             if (tableName === 'FeedbackRecord') {
@@ -63,28 +63,44 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
             }
           }
 
-          // 2. Filter Tutor ID (Hanya jika bernilai eksplisit dan bukan 'all')
-          if (filters.tutor_id && filters.tutor_id !== 'all' && filters.tutor_id !== '') {
-            query = query.eq('tutor_id', filters.tutor_id);
+          // 2. Filter Tutor
+          const tutorId = filters.tutor_id || filters.tutor;
+          if (tutorId && tutorId !== 'all' && tutorId !== '') {
+            query = query.eq('tutor_id', tutorId);
           }
 
-          // 3. Filter Status (Khusus WeeklyFeedback)
+          // 3. Filter Status (WeeklyFeedback)
           if (tableName === 'WeeklyFeedback' && filters.status && filters.status !== 'all' && filters.status !== '') {
             query = query.eq('status', filters.status);
           }
 
-          // 4. Filter Mingguan (Khusus WeeklyFeedback)
-          if (tableName === 'WeeklyFeedback' && filters.week_start && filters.week_start !== 'all' && filters.week_start !== '') {
-            query = query.gte('week_start_date', filters.week_start);
+          // 4. Filter Week (WeeklyFeedback)
+          const weekVal = filters.week || filters.week_start;
+          if (tableName === 'WeeklyFeedback' && weekVal && weekVal !== 'all' && weekVal !== '') {
+            query = query.gte('week_start_date', weekVal);
           }
 
-          // 5. Filter Bulan (Khusus FeedbackRecord jika ada)
-          if (tableName === 'FeedbackRecord' && filters.month && filters.month !== 'all' && filters.month !== '') {
-            query = query.ilike('created_date', `${filters.month}%`);
+          // 5. Filter Course
+          const courseVal = filters.course || filters.course_name;
+          if (courseVal && courseVal !== 'all' && courseVal !== '') {
+            query = query.eq('course_name', courseVal);
+          }
+
+          // 6. Filter Month & Year (FeedbackRecord)
+          if (tableName === 'FeedbackRecord') {
+            if (filters.record_month && filters.record_month !== 'all' && filters.record_month !== '') {
+              query = query.eq('record_month', parseInt(filters.record_month));
+            }
+            if (filters.record_year && filters.record_year !== 'all' && filters.record_year !== '') {
+              query = query.eq('record_year', parseInt(filters.record_year));
+            }
+            if (filters.month && filters.month !== 'all' && filters.month !== '') {
+              query = query.eq('month', parseInt(filters.month));
+            }
           }
         }
 
-        // Ordering
+        // Urutkan data berdasarkan waktu terbaru
         if (tableName === 'FeedbackRecord') {
           query = query.order('created_date', { ascending: false });
         } else {
@@ -112,7 +128,7 @@ export default function ExportDialog({ open, onOpenChange, modules = [], filters
       }
 
       if (totalRecords === 0) {
-        toast.error('No records found to export');
+        toast.error('No records found for the applied filters');
         setLoading(false);
         return;
       }

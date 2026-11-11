@@ -139,7 +139,6 @@ export default function WeeklyFeedback() {
     }
   };
 
-  // DOWNLOAD TEMPLATE INSTAN VIA SHEETJS
   const downloadTemplate = () => {
     setTemplateLoading(true);
     try {
@@ -183,9 +182,9 @@ export default function WeeklyFeedback() {
 
   const currentWeek = weekBounds();
   const exportFilters = {
-    week_start: week !== 'all' ? week : '',
-    tutor_id: tutor !== 'all' ? tutor : '',
-    status: status !== 'all' ? status : '',
+    week,
+    tutor_id: tutor,
+    status,
     search,
   };
 
