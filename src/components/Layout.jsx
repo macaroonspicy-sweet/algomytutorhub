@@ -17,11 +17,14 @@ const navItems = [
   { key: 'weekly-feedback', label: 'Weekly Feedback', icon: CalendarCheck, path: '/weekly-feedback', rbac: 'weekly_feedback' },
   { key: 'tasks', label: 'Task Management', icon: ClipboardList, path: '/tasks', rbac: 'task_management' },
   {
-    key: 'qc', label: 'QC Tutor', icon: CheckSquare, rbac: ['qc_records', 'qc_monthly', 'qc_submissions'],
+    key: 'qc', 
+    label: 'QC Tutor', 
+    icon: CheckSquare, 
+    // Hapus atau sesuaikan array rbac grup jika perlu, atau biarkan children-nya langsung tampil
     children: [
       { label: 'QC Records', path: '/admin/qc-tutor', rbac: 'qc_records' },
       { label: 'Monthly Evaluation', path: '/admin/qc-monthly', rbac: 'qc_monthly' },
-      { label: 'QC Submissions', path: '/qc/submissions' }, // rbac dihapus agar langsung tampil
+      { label: 'QC Submissions', path: '/qc/submissions' }, // Hilangkan properti rbac di sini agar langsung muncul
     ]
   },
   {
