@@ -1,10 +1,5 @@
-const db = globalThis.__B44_DB__ || { 
-  auth: { isAuthenticated: async () => false, me: async () => null }, 
-  entities: new Proxy({}, { get: () => ({ filter: async () => [], get: async () => null, create: async () => ({}), update: async () => ({}), delete: async () => ({}) }) }), 
-  integrations: { Core: { UploadFile: async () => ({ file_url: '' }) } } 
-};
-
 import React, { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,7 +32,7 @@ export default function StudentFeedback() {
   const [filterRecordYear, setFilterRecordYear] = useState('all');
   const [filterMyOnly, setFilterMyOnly] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const ITEMS_PER_PAGE = 10; // 10 data per halaman
+  const ITEMS_PER_PAGE = 10;
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const canDelete = hasPermission('student_feedback_delete');
@@ -50,24 +45,38 @@ export default function StudentFeedback() {
 
   const loadData = async () => {
     setLoading(true);
-    const [recs, perfs] = await Promise.all([
-      (currentUser?.role === 'Tutor' || currentUser?.role === 'Feedback Team')
-        ? db.entities.FeedbackRecord.filter({ tutor_id: currentUser.id }, '-created_date')
-        : db.entities.FeedbackRecord.list('-created_date'),
-      db.entities.StudentPerformanceCategory.list('order_index'),
-    ]);
+    try {
+      // Fetch FeedbackRecord dari Supabase
+      let feedbackQuery = supabase.from('FeedbackRecord').select('*');
+      
+      if (currentUser?.role === 'Tutor' || currentUser?.role === 'Feedback Team') {
+        feedbackQuery = feedbackQuery.eq('tutor_id', currentUser.id);
+      }
 
-    // PAKSA SORTING DESCENDING: Data Terbaru Selalu di Baris Pertama
-    const sortedRecs = [...(recs || [])].sort((a, b) => {
-      const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
-      const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
-      return timeB - timeA;
-    });
+      const { data: recs, error: recsErr } = await feedbackQuery.order('created_date', { ascending: false });
+      if (recsErr) throw recsErr;
 
-    setAllRecords(sortedRecs);
-    setRecords(sortedRecs);
-    setPerfCategories(perfs || []);
-    setLoading(false);
+      // Fetch StudentPerformanceCategory dari Supabase
+      const { data: perfs } = await supabase
+        .from('StudentPerformanceCategory')
+        .select('*')
+        .order('order_index', { ascending: true });
+
+      const sortedRecs = [...(recs || [])].sort((a, b) => {
+        const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
+        const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
+        return timeB - timeA;
+      });
+
+      setAllRecords(sortedRecs);
+      setRecords(sortedRecs);
+      setPerfCategories(perfs || []);
+    } catch (err) {
+      console.error('Error loading feedback data:', err.message);
+      toast.error('Gagal memuat data feedback: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Apply search and filters
@@ -89,7 +98,6 @@ export default function StudentFeedback() {
     if (filterRecordYear !== 'all') filtered = filtered.filter(r => String(r.record_year) === filterRecordYear);
     if (filterMyOnly) filtered = filtered.filter(r => r.tutor_id === currentUser.id);
 
-    // Re-sort descending setelah filter
     filtered.sort((a, b) => {
       const timeA = new Date(a.created_date || a.created_at || a.record_date || 0).getTime();
       const timeB = new Date(b.created_date || b.created_at || b.record_date || 0).getTime();
@@ -100,7 +108,6 @@ export default function StudentFeedback() {
     setCurrentPage(1);
   }, [searchQuery, filterCourse, filterTutor, filterMonth, filterRecordMonth, filterRecordYear, filterMyOnly, allRecords, currentUser]);
 
-  // Logic Pagination
   const totalPages = Math.ceil(records.length / ITEMS_PER_PAGE) || 1;
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
@@ -140,10 +147,19 @@ export default function StudentFeedback() {
   };
 
   const confirmDelete = async () => {
-    await db.entities.FeedbackRecord.delete(deleteTarget);
-    setDeleteTarget(null);
-    loadData();
-    toast.success('Feedback deleted');
+    try {
+      const { error } = await supabase
+        .from('FeedbackRecord')
+        .delete()
+        .eq('id', deleteTarget);
+
+      if (error) throw error;
+      setDeleteTarget(null);
+      loadData();
+      toast.success('Feedback deleted');
+    } catch (err) {
+      toast.error('Failed to delete: ' + err.message);
+    }
   };
 
   const handleSaved = () => {
@@ -154,7 +170,6 @@ export default function StudentFeedback() {
 
   const handlePreview = (r) => { setPreviewRecord(r); setPreviewOpen(true); };
 
-  // Helper Pagination dengan Ellipsis
   const getPageNumbers = () => {
     const pages = [];
     if (totalPages <= 7) {
@@ -327,7 +342,7 @@ export default function StudentFeedback() {
             )}
           </div>
 
-          {/* PURPLE STYLED PAGINATION UI */}
+          {/* Pagination UI */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-1.5 py-6">
               <Button
