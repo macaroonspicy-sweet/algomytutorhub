@@ -18,13 +18,14 @@ import { assignmentStatus, fmtDate, FEEDBACK_STATUS_META, weekBounds } from '@/l
 
 const ITEMS_PER_PAGE = 12;
 
-const classKeyOf = (item) => item.class_code || item.class_name || item.student_name || '';
+const classKeyOf = (item) => item.class_name || item.class_code || item.student_name || '';
 
 export default function WeeklyFeedback() {
   const { currentUser, hasPermission } = useAppAuth();
   const [items, setItems] = useState([]);
   const [classes, setClasses] = useState([]);
   const [tutors, setTutors] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [week, setWeek] = useState('all');
@@ -45,28 +46,63 @@ export default function WeeklyFeedback() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      // Mengambil data dari tabel WeeklyFeedbackAssignment
+      // 1. Fetch Weekly Assignments
       const { data: assignmentsData, error: assignErr } = await supabase
         .from('WeeklyFeedbackAssignment')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('created_date', { ascending: false });
 
       if (assignErr) {
         console.warn('WeeklyFeedbackAssignment fetch warning:', assignErr.message);
       }
 
+      // 2. Fetch Users (Tutors)
       const { data: userData } = await supabase
         .from('CustomUser')
         .select('*');
 
+      // 3. Fetch Feedback Records untuk kalkulasi Otomatis Mark Completed (berdasarkan jumlah murid)
+      const { data: recordsData } = await supabase
+        .from('FeedbackRecord')
+        .select('class_code, class_name, week_start_date');
+
       const fetchedAssignments = assignmentsData || [];
       const fetchedUsers = userData || [];
+      const fetchedRecords = recordsData || [];
 
-      setItems(fetchedAssignments);
+      // Otomatisasi Check Completed: Bandingkan jumlah feedback terisi dengan target student_count
+      const updatedAssignments = fetchedAssignments.map((assignment) => {
+        if (assignment.status === 'completed') return assignment;
 
-      const uniqueClassesList = [...new Set(fetchedAssignments.map(classKeyOf).filter(Boolean))];
+        // Hitung berapa murid yang sudah dapat feedback di kelas dan minggu ini
+        const filledCount = fetchedRecords.filter(r => 
+          (r.class_name === assignment.class_name || r.class_code === assignment.class_code)
+        ).length;
+
+        // Target murid di kelas (default 1 untuk private, atau sesuai isi student_count)
+        const targetCount = assignment.student_count || 1;
+
+        if (filledCount >= targetCount && filledCount > 0) {
+          // Update status di Supabase secara background
+          supabase
+            .from('WeeklyFeedbackAssignment')
+            .update({ status: 'completed', completed_at: new Date().toISOString() })
+            .eq('id', assignment.id)
+            .then();
+
+          return { ...assignment, status: 'completed' };
+        }
+        return assignment;
+      });
+
+      setItems(updatedAssignments);
+
+      // Ambil daftar unik Kelas dan Course untuk Dropdown
+      const uniqueClassesList = [...new Set(updatedAssignments.map(classKeyOf).filter(Boolean))];
+      const uniqueCoursesList = [...new Set(updatedAssignments.map(i => i.course_name).filter(Boolean))];
+
       setClasses(uniqueClassesList);
-
+      setCourses(uniqueCoursesList);
       setTutors(fetchedUsers.filter((u) => ['Tutor', 'Team Leader'].includes(u.role) && u.is_active !== false));
     } catch (err) {
       console.error('Error loading weekly feedback:', err);
@@ -110,7 +146,8 @@ export default function WeeklyFeedback() {
         .from('WeeklyFeedbackAssignment')
         .update({ 
           status: 'completed',
-          completed_by_name: currentUser?.full_name || currentUser?.email || 'Tutor'
+          completed_by_name: currentUser?.full_name || currentUser?.email || 'Tutor',
+          completed_at: new Date().toISOString()
         })
         .eq('id', item.id);
 
@@ -149,6 +186,7 @@ export default function WeeklyFeedback() {
           'Course Name': 'Visual Programming',
           'Tutor Name': currentUser?.full_name || 'Putri Nadia Ayu',
           'Tutor ID': currentUser?.id || 'tutor_01',
+          'Student Count': 1,
           'Week Start': '2026-11-09',
           'Week End': '2026-11-15',
           'Status': 'Pending',
@@ -162,6 +200,7 @@ export default function WeeklyFeedback() {
         { wch: 24 },
         { wch: 22 },
         { wch: 16 },
+        { wch: 14 },
         { wch: 14 },
         { wch: 14 },
         { wch: 12 },
@@ -349,6 +388,7 @@ export default function WeeklyFeedback() {
         editing={editing}
         classes={classes}
         tutors={tutors}
+        courses={courses}
         onSaved={loadAll}
       />
       <ImportWeeklyFeedbackDialog open={importOpen} onOpenChange={setImportOpen} onImported={loadAll} />
