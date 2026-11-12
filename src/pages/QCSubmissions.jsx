@@ -1,16 +1,27 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import Pagination from '@/components/ui/pagination';
-import { 
-  Loader2, Search, ExternalLink, CheckCircle2, Clock, 
-  CheckSquare, Square, Pencil, Trash2, X, Save, Download 
+import {
+  Loader2,
+  Search,
+  ExternalLink,
+  CheckCircle2,
+  Clock,
+  CheckSquare,
+  Square,
+  Pencil,
+  Trash2,
+  X,
+  Save,
+  Download,
+  Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import * as XLSX from 'xlsx';
 
 const PER_PAGE = 10;
 
@@ -34,6 +45,11 @@ const getMonthName = (monthNum) => {
   return found ? found.label : '—';
 };
 
+const makeId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
 function StatCard({ label, value, icon: Icon, tone }) {
   return (
     <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
@@ -49,6 +65,9 @@ function StatCard({ label, value, icon: Icon, tone }) {
 }
 
 export default function QCSubmissions() {
+  const { currentUser } = useAppAuth();
+  const isTutorOnly = currentUser?.role === 'Tutor';
+
   const now = new Date();
   const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -60,7 +79,18 @@ export default function QCSubmissions() {
     search: '',
   });
 
-  // State for Edit Modal
+  // State untuk Modal Submit Baru (khusus Tutor / manual)
+  const [createOpen, setCreateOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    period_month: now.getMonth() + 1,
+    period_year: now.getFullYear(),
+    period: 1,
+    recording_url: '',
+    notes: '',
+  });
+
+  // State untuk Modal Edit
   const [editingItem, setEditingItem] = useState(null);
   const [editForm, setEditForm] = useState({
     tutor_name: '',
@@ -75,16 +105,11 @@ export default function QCSubmissions() {
   const loadSubmissions = async () => {
     setLoading(true);
     try {
-      let query = supabase
+      const { data, error } = await supabase
         .from('QCSubmission')
         .select('*')
         .order('created_date', { ascending: false });
 
-      if (filters.status !== 'all') {
-        query = query.eq('status', filters.status);
-      }
-
-      const { data, error } = await query;
       if (error) throw error;
       setSubmissions(data || []);
     } catch (err) {
@@ -96,13 +121,73 @@ export default function QCSubmissions() {
 
   useEffect(() => {
     loadSubmissions();
-  }, [filters.status]);
+  }, []);
 
-  // Toggle status antara 'evaluated' dan 'submitted' (atau status sebelumnya)
+  // Batasi data: jika Tutor, hanya tampilkan miliknya sendiri
+  const roleScopedSubmissions = useMemo(() => {
+    if (!isTutorOnly) return submissions;
+    const myId = currentUser?.id;
+    const myName = (currentUser?.full_name || '').toLowerCase().trim();
+
+    return submissions.filter((s) => {
+      if (myId && s.tutor_id && s.tutor_id === myId) return true;
+      if (myName && s.tutor_name && s.tutor_name.toLowerCase().trim() === myName) return true;
+      return false;
+    });
+  }, [submissions, isTutorOnly, currentUser]);
+
+  const handleCreateSubmit = async () => {
+    if (!createForm.recording_url.trim()) {
+      toast.error('Link rekaman kelas wajib diisi');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const payload = {
+        id: makeId(),
+        tutor_id: currentUser?.id || null,
+        tutor_name: currentUser?.full_name || 'Tutor',
+        period_month: Number(createForm.period_month),
+        period_year: Number(createForm.period_year),
+        period: Number(createForm.period),
+        recording_url: createForm.recording_url.trim(),
+        notes: createForm.notes.trim(),
+        status: 'submitted',
+        submission_date: nowIso.slice(0, 10),
+        created_date: nowIso,
+        updated_date: nowIso,
+      };
+
+      const { error } = await supabase.from('QCSubmission').insert([payload]);
+      if (error) throw error;
+
+      toast.success('Link rekaman QC berhasil dikirim!');
+      setCreateOpen(false);
+      setCreateForm({
+        period_month: now.getMonth() + 1,
+        period_year: now.getFullYear(),
+        period: 1,
+        recording_url: '',
+        notes: '',
+      });
+      loadSubmissions();
+    } catch (err) {
+      toast.error('Gagal mengirim submission', { description: err.message });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const toggleEvaluatedStatus = async (item) => {
-    const newStatus = item.status === 'evaluated' 
-      ? (item.recording_url ? 'submitted' : 'pending') 
-      : 'evaluated';
+    if (isTutorOnly) return;
+    const newStatus =
+      item.status === 'evaluated'
+        ? item.recording_url
+          ? 'submitted'
+          : 'pending'
+        : 'evaluated';
 
     try {
       const { error } = await supabase
@@ -121,10 +206,7 @@ export default function QCSubmissions() {
   const handleDelete = async (id) => {
     if (!confirm('Apakah kamu yakin ingin menghapus submission ini?')) return;
     try {
-      const { error } = await supabase
-        .from('QCSubmission')
-        .delete()
-        .eq('id', id);
+      const { error } = await supabase.from('QCSubmission').delete().eq('id', id);
 
       if (error) throw error;
       toast.success('Submission berhasil dihapus');
@@ -137,18 +219,23 @@ export default function QCSubmissions() {
   const handleSaveEdit = async () => {
     if (!editingItem) return;
     try {
+      const updatePayload = {
+        period_month: Number(editForm.period_month),
+        period_year: Number(editForm.period_year),
+        period: Number(editForm.period),
+        recording_url: editForm.recording_url,
+        notes: editForm.notes,
+        updated_date: new Date().toISOString(),
+      };
+
+      if (!isTutorOnly) {
+        updatePayload.tutor_name = editForm.tutor_name;
+        updatePayload.status = editForm.status;
+      }
+
       const { error } = await supabase
         .from('QCSubmission')
-        .update({
-          tutor_name: editForm.tutor_name,
-          period_month: Number(editForm.period_month),
-          period_year: Number(editForm.period_year),
-          period: Number(editForm.period),
-          recording_url: editForm.recording_url,
-          notes: editForm.notes,
-          status: editForm.status,
-          updated_date: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq('id', editingItem.id);
 
       if (error) throw error;
@@ -165,13 +252,16 @@ export default function QCSubmissions() {
     setPage(1);
   };
 
-  const filtered = submissions.filter((s) => {
+  const filtered = roleScopedSubmissions.filter((s) => {
+    const normalizedStatus = s.status || 'pending';
+    const matchStatus =
+      filters.status === 'all' || normalizedStatus === filters.status;
     const matchMonth =
       filters.month === 'all' || Number(s.period_month) === Number(filters.month);
     const matchPeriod =
       filters.period === 'all' || Number(s.period) === Number(filters.period);
 
-    if (!matchMonth || !matchPeriod) return false;
+    if (!matchStatus || !matchMonth || !matchPeriod) return false;
 
     if (!filters.search.trim()) return true;
     const q = filters.search.toLowerCase();
@@ -181,83 +271,106 @@ export default function QCSubmissions() {
     );
   });
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (filtered.length === 0) {
       toast.error('Tidak ada data untuk di-export');
       return;
     }
 
-    const exportRows = filtered.map((s, idx) => ({
-      No: idx + 1,
-      Tutor: s.tutor_name || '-',
-      Bulan: s.period_month ? getMonthName(s.period_month) : '-',
-      Tahun: s.period_year || '-',
-      Periode: s.period ? `Periode ${s.period}` : '-',
-      'Catatan / Keterangan': s.notes || '-',
-      Status:
-        s.status === 'evaluated'
-          ? 'Evaluated'
-          : s.status === 'submitted'
-          ? 'Submitted'
-          : 'Pending',
-      'Recording Link': s.recording_url || '-',
-      'Tanggal Submit': s.submission_date || '-',
-    }));
+    try {
+      const XLSX = await import('xlsx');
 
-    const worksheet = XLSX.utils.json_to_sheet(exportRows);
-    worksheet['!cols'] = [
-      { wch: 5 },  // No
-      { wch: 24 }, // Tutor
-      { wch: 14 }, // Bulan
-      { wch: 8 },  // Tahun
-      { wch: 14 }, // Periode
-      { wch: 30 }, // Catatan
-      { wch: 14 }, // Status
-      { wch: 42 }, // Recording Link
-      { wch: 15 }, // Tanggal Submit
-    ];
+      const exportRows = filtered.map((s, idx) => ({
+        No: idx + 1,
+        Tutor: s.tutor_name || '-',
+        Bulan: s.period_month ? getMonthName(s.period_month) : '-',
+        Tahun: s.period_year || '-',
+        Periode: s.period ? `Periode ${s.period}` : '-',
+        'Catatan / Keterangan': s.notes || '-',
+        Status:
+          s.status === 'evaluated'
+            ? 'Evaluated'
+            : s.status === 'submitted'
+            ? 'Submitted'
+            : 'Pending',
+        'Recording Link': s.recording_url || '-',
+        'Tanggal Submit': s.submission_date || '-',
+      }));
 
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'QC Submissions');
+      const worksheet = XLSX.utils.json_to_sheet(exportRows);
+      worksheet['!cols'] = [
+        { wch: 5 },
+        { wch: 24 },
+        { wch: 14 },
+        { wch: 8 },
+        { wch: 14 },
+        { wch: 30 },
+        { wch: 14 },
+        { wch: 42 },
+        { wch: 15 },
+      ];
 
-    const dateStr = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(workbook, `QC_Submissions_${dateStr}.xlsx`);
-    toast.success('File Excel berhasil diunduh');
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'QC Submissions');
+
+      const dateStr = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(workbook, `QC_Submissions_${dateStr}.xlsx`);
+      toast.success('File Excel berhasil diunduh');
+    } catch (err) {
+      toast.error('Gagal export Excel', { description: err.message });
+    }
   };
 
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   const summary = {
-    total: submissions.length,
-    evaluated: submissions.filter((s) => s.status === 'evaluated').length,
-    submitted: submissions.filter((s) => s.status === 'submitted').length,
-    pending: submissions.filter((s) => s.status === 'pending' || !s.status).length,
+    total: roleScopedSubmissions.length,
+    evaluated: roleScopedSubmissions.filter((s) => s.status === 'evaluated').length,
+    submitted: roleScopedSubmissions.filter((s) => s.status === 'submitted').length,
+    pending: roleScopedSubmissions.filter((s) => s.status === 'pending' || !s.status).length,
   };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">QC Submissions</h1>
+          <h1 className="text-3xl font-bold text-foreground">
+            {isTutorOnly ? 'My QC Submissions' : 'QC Submissions'}
+          </h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            Daftar link rekaman kelas yang dikirimkan oleh tutor untuk dinilai.
+            {isTutorOnly
+              ? 'Riwayat link rekaman kelas yang kamu kirimkan untuk evaluasi QC.'
+              : 'Daftar link rekaman kelas yang dikirimkan oleh tutor untuk dinilai.'}
           </p>
         </div>
-        <Button
-          onClick={handleExportExcel}
-          disabled={loading || filtered.length === 0}
-          className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white self-start lg:self-auto"
-        >
-          <Download className="w-4 h-4" />
-          Export Excel
-        </Button>
+        <div className="flex flex-wrap gap-2 self-start lg:self-auto">
+          {isTutorOnly && (
+            <Button
+              onClick={() => setCreateOpen(true)}
+              className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
+            >
+              <Plus className="w-4 h-4" />
+              Submit Recording
+            </Button>
+          )}
+          {!isTutorOnly && (
+            <Button
+              onClick={handleExportExcel}
+              disabled={loading || filtered.length === 0}
+              className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              <Download className="w-4 h-4" />
+              Export Excel
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-3">
         <StatCard label="Total Submissions" value={summary.total} icon={CheckCircle2} tone="bg-chart-3/70" />
         <StatCard label="Sudah Dinilai (Evaluated)" value={summary.evaluated} icon={CheckSquare} tone="bg-emerald-600/70" />
-        <StatCard label="Submitted (Tutor Kirim)" value={summary.submitted} icon={Clock} tone="bg-primary/70" />
+        <StatCard label="Submitted (Terkirim)" value={summary.submitted} icon={Clock} tone="bg-primary/70" />
         <StatCard label="Pending (Belum Kirim)" value={summary.pending} icon={Clock} tone="bg-amber-600/70" />
       </div>
 
@@ -268,7 +381,7 @@ export default function QCSubmissions() {
             <Input
               value={filters.search}
               onChange={(e) => set('search', e.target.value)}
-              placeholder="Cari nama tutor atau catatan..."
+              placeholder={isTutorOnly ? 'Cari catatan atau keterangan...' : 'Cari nama tutor atau catatan...'}
               className="pl-9"
             />
           </div>
@@ -319,7 +432,9 @@ export default function QCSubmissions() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/50">
                 <tr className="text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-3 font-medium w-12 text-center">Status Nilai</th>
+                  {!isTutorOnly && (
+                    <th className="px-4 py-3 font-medium w-12 text-center">Status Nilai</th>
+                  )}
                   <th className="px-4 py-3 font-medium">Tutor</th>
                   <th className="px-4 py-3 font-medium">Bulan & Periode</th>
                   <th className="px-4 py-3 font-medium">Catatan / Keterangan</th>
@@ -329,86 +444,109 @@ export default function QCSubmissions() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {paginated.map((s) => (
-                  <tr key={s.id || s.created_date} className="hover:bg-secondary/30 transition-colors">
-                    <td className="px-4 py-3 text-center">
-                      <button 
-                        onClick={() => toggleEvaluatedStatus(s)}
-                        title="Klik untuk centang sudah dinilai (Evaluated)"
-                        className="p-1 rounded hover:bg-secondary transition-colors inline-flex items-center justify-center text-primary"
-                      >
-                        {s.status === 'evaluated' ? (
-                          <CheckSquare className="w-5 h-5 text-emerald-500" />
-                        ) : (
-                          <Square className="w-5 h-5 text-muted-foreground" />
-                        )}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 font-medium text-foreground">{s.tutor_name || '—'}</td>
-                    <td className="px-4 py-3">
-                      <div className="text-xs font-medium text-foreground">
-                        {s.period_month ? `${getMonthName(s.period_month)} ${s.period_year || ''}` : '—'}
-                      </div>
-                      <div className="text-[11px] text-primary">
-                        {s.period ? `Periode ${s.period}` : '—'}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground max-w-[250px] truncate">
-                      {s.notes || '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant="outline" className={
-                        s.status === 'evaluated' 
-                          ? 'border-emerald-500/40 text-emerald-400 text-[10px]' 
-                          : s.status === 'submitted'
-                          ? 'border-primary/40 text-primary text-[10px]'
-                          : 'border-amber-500/40 text-amber-400 text-[10px]'
-                      }>
-                        {s.status === 'evaluated' ? 'Evaluated' : (s.status === 'submitted' ? 'Submitted' : 'Pending')}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {s.recording_url ? (
-                        <a href={s.recording_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline text-xs font-medium">
-                          <ExternalLink className="w-3.5 h-3.5" /> Buka Link
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">—</span>
+                {paginated.map((s) => {
+                  const canTutorEdit = !isTutorOnly || s.status !== 'evaluated';
+                  return (
+                    <tr key={s.id || s.created_date} className="hover:bg-secondary/30 transition-colors">
+                      {!isTutorOnly && (
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => toggleEvaluatedStatus(s)}
+                            title="Klik untuk centang sudah dinilai (Evaluated)"
+                            className="p-1 rounded hover:bg-secondary transition-colors inline-flex items-center justify-center text-primary"
+                          >
+                            {s.status === 'evaluated' ? (
+                              <CheckSquare className="w-5 h-5 text-emerald-500" />
+                            ) : (
+                              <Square className="w-5 h-5 text-muted-foreground" />
+                            )}
+                          </button>
+                        </td>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <Button 
-                          size="icon" 
-                          variant="ghost" 
-                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            setEditingItem(s);
-                            setEditForm({
-                              tutor_name: s.tutor_name || '',
-                              period_month: s.period_month || now.getMonth() + 1,
-                              period_year: s.period_year || now.getFullYear(),
-                              period: s.period || 1,
-                              recording_url: s.recording_url || '',
-                              notes: s.notes || '',
-                              status: s.status || 'submitted',
-                            });
-                          }}
+                      <td className="px-4 py-3 font-medium text-foreground">{s.tutor_name || '—'}</td>
+                      <td className="px-4 py-3">
+                        <div className="text-xs font-medium text-foreground">
+                          {s.period_month ? `${getMonthName(s.period_month)} ${s.period_year || ''}` : '—'}
+                        </div>
+                        <div className="text-[11px] text-primary">
+                          {s.period ? `Periode ${s.period}` : '—'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground max-w-[250px] truncate">
+                        {s.notes || '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge
+                          variant="outline"
+                          className={
+                            s.status === 'evaluated'
+                              ? 'border-emerald-500/40 text-emerald-500 text-[10px]'
+                              : s.status === 'submitted'
+                              ? 'border-primary/40 text-primary text-[10px]'
+                              : 'border-amber-500/40 text-amber-500 text-[10px]'
+                          }
                         >
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button 
-                          size="icon" 
-                          variant="ghost" 
-                          className="h-8 w-8 text-destructive hover:text-destructive/80"
-                          onClick={() => handleDelete(s.id)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {s.status === 'evaluated'
+                            ? 'Evaluated'
+                            : s.status === 'submitted'
+                            ? 'Submitted'
+                            : 'Pending'}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {s.recording_url ? (
+                          <a
+                            href={s.recording_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-primary hover:underline text-xs font-medium"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" /> Buka Link
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {canTutorEdit ? (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              onClick={() => {
+                                setEditingItem(s);
+                                setEditForm({
+                                  tutor_name: s.tutor_name || '',
+                                  period_month: s.period_month || now.getMonth() + 1,
+                                  period_year: s.period_year || now.getFullYear(),
+                                  period: s.period || 1,
+                                  recording_url: s.recording_url || '',
+                                  notes: s.notes || '',
+                                  status: s.status || 'submitted',
+                                });
+                              }}
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">Locked</span>
+                          )}
+                          {!isTutorOnly && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-destructive hover:text-destructive/80"
+                              onClick={() => handleDelete(s.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -416,6 +554,90 @@ export default function QCSubmissions() {
       </div>
 
       {totalPages > 1 && <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />}
+
+      {/* Modal Submit Baru (Tutor) */}
+      {createOpen && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-foreground">Submit Recording QC</h3>
+              <Button size="icon" variant="ghost" onClick={() => setCreateOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Bulan</label>
+                  <Select
+                    value={String(createForm.period_month)}
+                    onValueChange={(v) => setCreateForm({ ...createForm, period_month: Number(v) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTHS.map((m) => (
+                        <SelectItem key={m.value} value={String(m.value)}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Tahun</label>
+                  <Input
+                    type="number"
+                    value={createForm.period_year}
+                    onChange={(e) => setCreateForm({ ...createForm, period_year: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Periode</label>
+                  <Select
+                    value={String(createForm.period)}
+                    onValueChange={(v) => setCreateForm({ ...createForm, period: Number(v) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">Periode 1</SelectItem>
+                      <SelectItem value="2">Periode 2</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Recording URL / Link Drive</label>
+                <Input
+                  placeholder="https://drive.google.com/..."
+                  value={createForm.recording_url}
+                  onChange={(e) => setCreateForm({ ...createForm, recording_url: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Catatan / Nama Kelas</label>
+                <Input
+                  placeholder="Contoh: MY 1-1 VP 020 - Lesson 4"
+                  value={createForm.notes}
+                  onChange={(e) => setCreateForm({ ...createForm, notes: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
+              <Button onClick={handleCreateSubmit} disabled={submitting} className="gap-1.5">
+                {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                Kirim Submission
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Edit */}
       {editingItem && (
@@ -427,15 +649,17 @@ export default function QCSubmissions() {
                 <X className="w-4 h-4" />
               </Button>
             </div>
-            
+
             <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Nama Tutor</label>
-                <Input 
-                  value={editForm.tutor_name} 
-                  onChange={(e) => setEditForm({ ...editForm, tutor_name: e.target.value })} 
-                />
-              </div>
+              {!isTutorOnly && (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Nama Tutor</label>
+                  <Input
+                    value={editForm.tutor_name}
+                    onChange={(e) => setEditForm({ ...editForm, tutor_name: e.target.value })}
+                  />
+                </div>
+              )}
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -481,29 +705,31 @@ export default function QCSubmissions() {
 
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Recording URL / Playlist</label>
-                <Input 
-                  value={editForm.recording_url} 
-                  onChange={(e) => setEditForm({ ...editForm, recording_url: e.target.value })} 
+                <Input
+                  value={editForm.recording_url}
+                  onChange={(e) => setEditForm({ ...editForm, recording_url: e.target.value })}
                 />
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Catatan</label>
-                <Input 
-                  value={editForm.notes} 
-                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} 
+                <Input
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
                 />
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Status</label>
-                <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="submitted">Submitted</SelectItem>
-                    <SelectItem value="evaluated">Evaluated</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {!isTutorOnly && (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Status</label>
+                  <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="submitted">Submitted</SelectItem>
+                      <SelectItem value="evaluated">Evaluated</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-2">

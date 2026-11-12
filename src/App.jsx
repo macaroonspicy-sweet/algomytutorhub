@@ -46,7 +46,10 @@ function ProtectedAppLayout() {
 
 function RbacRoute({ rbacKey, children }) {
   const { hasPermission } = useAppAuth();
-  if (!hasPermission(rbacKey)) return <Navigate to="/unauthorized" replace />;
+  const keys = Array.isArray(rbacKey) ? rbacKey : [rbacKey];
+  if (!keys.some((k) => hasPermission(k))) {
+    return <Navigate to="/unauthorized" replace />;
+  }
   return children;
 }
 
@@ -78,7 +81,7 @@ const AuthenticatedApp = () => {
           <Route path="/categories/qc-aspects" element={<RbacRoute rbacKey="category_qc"><QCEvaluationAspectPage /></RbacRoute>} />
           <Route path="/student-feedback" element={<RbacRoute rbacKey="student_feedback"><StudentFeedback /></RbacRoute>} />
           <Route path="/weekly-feedback" element={<RbacRoute rbacKey="weekly_feedback"><WeeklyFeedback /></RbacRoute>} />
-          <Route path="/qc/submissions" element={<RbacRoute rbacKey="qc_records"><QCSubmissions /></RbacRoute>} />
+          <Route path="/qc/submissions" element={<RbacRoute rbacKey={['qc_records', 'my_qc']}><QCSubmissions /></RbacRoute>} />
           <Route path="/tasks" element={<RbacRoute rbacKey="task_management"><Tasks /></RbacRoute>} />
           <Route path="/tutor-admin" element={<RbacRoute rbacKey="task_management"><TutorAdmin /></RbacRoute>} />
           <Route path="/categories/courses" element={<RbacRoute rbacKey="category_courses"><CoursesCategory /></RbacRoute>} />
