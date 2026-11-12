@@ -7,11 +7,32 @@ import { Badge } from '@/components/ui/badge';
 import Pagination from '@/components/ui/pagination';
 import { 
   Loader2, Search, ExternalLink, CheckCircle2, Clock, 
-  CheckSquare, Square, Pencil, Trash2, X, Save 
+  CheckSquare, Square, Pencil, Trash2, X, Save, Download 
 } from 'lucide-react';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 
 const PER_PAGE = 10;
+
+const MONTHS = [
+  { value: 1, label: 'Januari' },
+  { value: 2, label: 'Februari' },
+  { value: 3, label: 'Maret' },
+  { value: 4, label: 'April' },
+  { value: 5, label: 'Mei' },
+  { value: 6, label: 'Juni' },
+  { value: 7, label: 'Juli' },
+  { value: 8, label: 'Agustus' },
+  { value: 9, label: 'September' },
+  { value: 10, label: 'Oktober' },
+  { value: 11, label: 'November' },
+  { value: 12, label: 'Desember' },
+];
+
+const getMonthName = (monthNum) => {
+  const found = MONTHS.find((m) => m.value === Number(monthNum));
+  return found ? found.label : '—';
+};
 
 function StatCard({ label, value, icon: Icon, tone }) {
   return (
@@ -28,14 +49,28 @@ function StatCard({ label, value, icon: Icon, tone }) {
 }
 
 export default function QCSubmissions() {
+  const now = new Date();
   const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState({ status: 'all', search: '' });
+  const [filters, setFilters] = useState({
+    status: 'all',
+    month: 'all',
+    period: 'all',
+    search: '',
+  });
 
   // State for Edit Modal
   const [editingItem, setEditingItem] = useState(null);
-  const [editForm, setEditForm] = useState({ tutor_name: '', recording_url: '', notes: '', status: 'submitted' });
+  const [editForm, setEditForm] = useState({
+    tutor_name: '',
+    period_month: now.getMonth() + 1,
+    period_year: now.getFullYear(),
+    period: 1,
+    recording_url: '',
+    notes: '',
+    status: 'submitted',
+  });
 
   const loadSubmissions = async () => {
     setLoading(true);
@@ -65,8 +100,6 @@ export default function QCSubmissions() {
 
   // Toggle status antara 'evaluated' dan 'submitted' (atau status sebelumnya)
   const toggleEvaluatedStatus = async (item) => {
-    // Jika saat ini sudah evaluated, kembalikan ke submitted (atau pending jika ada recording_url kosong).
-    // Jika belum evaluated, ubah jadi evaluated.
     const newStatus = item.status === 'evaluated' 
       ? (item.recording_url ? 'submitted' : 'pending') 
       : 'evaluated';
@@ -108,10 +141,13 @@ export default function QCSubmissions() {
         .from('QCSubmission')
         .update({
           tutor_name: editForm.tutor_name,
+          period_month: Number(editForm.period_month),
+          period_year: Number(editForm.period_year),
+          period: Number(editForm.period),
           recording_url: editForm.recording_url,
           notes: editForm.notes,
           status: editForm.status,
-          updated_date: new Date().toISOString()
+          updated_date: new Date().toISOString(),
         })
         .eq('id', editingItem.id);
 
@@ -124,9 +160,19 @@ export default function QCSubmissions() {
     }
   };
 
-  const set = (key, value) => setFilters((f) => ({ ...f, [key]: value }));
+  const set = (key, value) => {
+    setFilters((f) => ({ ...f, [key]: value }));
+    setPage(1);
+  };
 
   const filtered = submissions.filter((s) => {
+    const matchMonth =
+      filters.month === 'all' || Number(s.period_month) === Number(filters.month);
+    const matchPeriod =
+      filters.period === 'all' || Number(s.period) === Number(filters.period);
+
+    if (!matchMonth || !matchPeriod) return false;
+
     if (!filters.search.trim()) return true;
     const q = filters.search.toLowerCase();
     return (
@@ -135,14 +181,58 @@ export default function QCSubmissions() {
     );
   });
 
+  const handleExportExcel = () => {
+    if (filtered.length === 0) {
+      toast.error('Tidak ada data untuk di-export');
+      return;
+    }
+
+    const exportRows = filtered.map((s, idx) => ({
+      No: idx + 1,
+      Tutor: s.tutor_name || '-',
+      Bulan: s.period_month ? getMonthName(s.period_month) : '-',
+      Tahun: s.period_year || '-',
+      Periode: s.period ? `Periode ${s.period}` : '-',
+      'Catatan / Keterangan': s.notes || '-',
+      Status:
+        s.status === 'evaluated'
+          ? 'Evaluated'
+          : s.status === 'submitted'
+          ? 'Submitted'
+          : 'Pending',
+      'Recording Link': s.recording_url || '-',
+      'Tanggal Submit': s.submission_date || '-',
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    worksheet['!cols'] = [
+      { wch: 5 },  // No
+      { wch: 24 }, // Tutor
+      { wch: 14 }, // Bulan
+      { wch: 8 },  // Tahun
+      { wch: 14 }, // Periode
+      { wch: 30 }, // Catatan
+      { wch: 14 }, // Status
+      { wch: 42 }, // Recording Link
+      { wch: 15 }, // Tanggal Submit
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'QC Submissions');
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `QC_Submissions_${dateStr}.xlsx`);
+    toast.success('File Excel berhasil diunduh');
+  };
+
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   const summary = {
     total: submissions.length,
-    evaluated: submissions.filter(s => s.status === 'evaluated').length,
-    submitted: submissions.filter(s => s.status === 'submitted').length,
-    pending: submissions.filter(s => s.status === 'pending' || !s.status).length,
+    evaluated: submissions.filter((s) => s.status === 'evaluated').length,
+    submitted: submissions.filter((s) => s.status === 'submitted').length,
+    pending: submissions.filter((s) => s.status === 'pending' || !s.status).length,
   };
 
   return (
@@ -154,6 +244,14 @@ export default function QCSubmissions() {
             Daftar link rekaman kelas yang dikirimkan oleh tutor untuk dinilai.
           </p>
         </div>
+        <Button
+          onClick={handleExportExcel}
+          disabled={loading || filtered.length === 0}
+          className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white self-start lg:self-auto"
+        >
+          <Download className="w-4 h-4" />
+          Export Excel
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-3">
@@ -167,8 +265,32 @@ export default function QCSubmissions() {
         <div className="flex flex-col lg:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input value={filters.search} onChange={(e) => set('search', e.target.value)} placeholder="Cari nama tutor atau catatan..." className="pl-9" />
+            <Input
+              value={filters.search}
+              onChange={(e) => set('search', e.target.value)}
+              placeholder="Cari nama tutor atau catatan..."
+              className="pl-9"
+            />
           </div>
+          <Select value={filters.month} onValueChange={(v) => set('month', v)}>
+            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Bulan" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Semua Bulan</SelectItem>
+              {MONTHS.map((m) => (
+                <SelectItem key={m.value} value={String(m.value)}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={filters.period} onValueChange={(v) => set('period', v)}>
+            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Periode" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Semua Periode</SelectItem>
+              <SelectItem value="1">Periode 1</SelectItem>
+              <SelectItem value="2">Periode 2</SelectItem>
+            </SelectContent>
+          </Select>
           <Select value={filters.status} onValueChange={(v) => set('status', v)}>
             <SelectTrigger className="lg:w-44"><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent>
@@ -199,6 +321,7 @@ export default function QCSubmissions() {
                 <tr className="text-left text-xs text-muted-foreground">
                   <th className="px-4 py-3 font-medium w-12 text-center">Status Nilai</th>
                   <th className="px-4 py-3 font-medium">Tutor</th>
+                  <th className="px-4 py-3 font-medium">Bulan & Periode</th>
                   <th className="px-4 py-3 font-medium">Catatan / Keterangan</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium text-right">Recording Link</th>
@@ -222,6 +345,14 @@ export default function QCSubmissions() {
                       </button>
                     </td>
                     <td className="px-4 py-3 font-medium text-foreground">{s.tutor_name || '—'}</td>
+                    <td className="px-4 py-3">
+                      <div className="text-xs font-medium text-foreground">
+                        {s.period_month ? `${getMonthName(s.period_month)} ${s.period_year || ''}` : '—'}
+                      </div>
+                      <div className="text-[11px] text-primary">
+                        {s.period ? `Periode ${s.period}` : '—'}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground max-w-[250px] truncate">
                       {s.notes || '—'}
                     </td>
@@ -255,9 +386,12 @@ export default function QCSubmissions() {
                             setEditingItem(s);
                             setEditForm({
                               tutor_name: s.tutor_name || '',
+                              period_month: s.period_month || now.getMonth() + 1,
+                              period_year: s.period_year || now.getFullYear(),
+                              period: s.period || 1,
                               recording_url: s.recording_url || '',
                               notes: s.notes || '',
-                              status: s.status || 'submitted'
+                              status: s.status || 'submitted',
                             });
                           }}
                         >
@@ -302,6 +436,49 @@ export default function QCSubmissions() {
                   onChange={(e) => setEditForm({ ...editForm, tutor_name: e.target.value })} 
                 />
               </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Bulan</label>
+                  <Select
+                    value={String(editForm.period_month)}
+                    onValueChange={(v) => setEditForm({ ...editForm, period_month: Number(v) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTHS.map((m) => (
+                        <SelectItem key={m.value} value={String(m.value)}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Tahun</label>
+                  <Input
+                    type="number"
+                    value={editForm.period_year}
+                    onChange={(e) => setEditForm({ ...editForm, period_year: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Periode</label>
+                  <Select
+                    value={String(editForm.period)}
+                    onValueChange={(v) => setEditForm({ ...editForm, period: Number(v) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">Periode 1</SelectItem>
+                      <SelectItem value="2">Periode 2</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Recording URL / Playlist</label>
                 <Input 
