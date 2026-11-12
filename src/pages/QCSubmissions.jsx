@@ -45,11 +45,6 @@ const getMonthName = (monthNum) => {
   return found ? found.label : '—';
 };
 
-const makeId = () =>
-  typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
 function StatCard({ label, value, icon: Icon, tone }) {
   return (
     <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
@@ -130,8 +125,12 @@ export default function QCSubmissions() {
     const myName = (currentUser?.full_name || '').toLowerCase().trim();
 
     return submissions.filter((s) => {
-      if (myId && s.tutor_id && s.tutor_id === myId) return true;
-      if (myName && s.tutor_name && s.tutor_name.toLowerCase().trim() === myName) return true;
+      if (myId && s.tutor_id !== null && s.tutor_id !== undefined && String(s.tutor_id) === String(myId)) {
+        return true;
+      }
+      if (myName && s.tutor_name && s.tutor_name.toLowerCase().trim() === myName) {
+        return true;
+      }
       return false;
     });
   }, [submissions, isTutorOnly, currentUser]);
@@ -145,9 +144,14 @@ export default function QCSubmissions() {
     setSubmitting(true);
     try {
       const nowIso = new Date().toISOString();
+      const rawTutorId = currentUser?.id;
+      const numericTutorId =
+        rawTutorId !== null && rawTutorId !== undefined && /^\d+$/.test(String(rawTutorId))
+          ? Number(rawTutorId)
+          : null;
+
       const payload = {
-        id: makeId(),
-        tutor_id: currentUser?.id || null,
+        tutor_id: numericTutorId,
         tutor_name: currentUser?.full_name || 'Tutor',
         period_month: Number(createForm.period_month),
         period_year: Number(createForm.period_year),
