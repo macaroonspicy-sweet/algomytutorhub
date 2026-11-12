@@ -1,7 +1,5 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
-
 import React, { useEffect, useState } from 'react';
-
+import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,18 +49,24 @@ export default function Tasks() {
   const [selected, setSelected] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  const canManage = currentUser?.role === 'Team Leader';
+  const canManage = ['Team Leader', 'Head of Tutor'].includes(currentUser?.role);
   const canView = hasPermission('task_management');
 
   const load = async () => {
     try {
-      const [res, users] = await Promise.all([
+      const [res, usersRes] = await Promise.all([
         invokeService('taskService', { action: 'list' }),
-        db.entities.CustomUser.list(),
+        supabase
+          .from('CustomUser')
+          .select('id, full_name, role, is_active')
+          .in('role', ['Tutor', 'Team Leader'])
+          .order('full_name', { ascending: true }),
       ]);
       if (res.data?.error) throw new Error(res.data.error);
+      if (usersRes.error) throw usersRes.error;
+
       setTasks(res.data.items || []);
-      setTutors((users || []).filter((u) => ['Tutor', 'Team Leader'].includes(u.role) && u.is_active !== false));
+      setTutors((usersRes.data || []).filter((u) => u.is_active !== false));
       return res.data.items || [];
     } catch (err) {
       toast.error('Could not load tasks', { description: err?.response?.data?.error || err.message });
@@ -118,7 +122,6 @@ export default function Tasks() {
   }, {})).sort((a, b) => b.total - a.total);
 
   const openTask = (task) => { setSelected(task); setDetailOpen(true); };
-  const openTaskById = (id) => { const found = tasks.find((t) => t.id === id); if (found) openTask(found); };
 
   if (!canView) {
     return (
