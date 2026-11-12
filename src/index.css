@@ -6,39 +6,41 @@
 
 @layer base {
   :root {
-    --background: 222 47% 7%;
-    --foreground: 210 40% 96%;
-    --card: 222 40% 11%;
-    --card-foreground: 210 40% 96%;
-    --popover: 222 40% 11%;
-    --popover-foreground: 210 40% 96%;
-    --primary: 262 83% 58%;
+    --background: 225 20% 96%;          /* #F4F5F8 - Latar halaman abu-abu lembut */
+    --foreground: 225 14% 11%;          /* #181A20 - Teks utama gelap */
+    --card: 0 0% 100%;                  /* #FFFFFF - Card & tabel putih bersih */
+    --card-foreground: 225 14% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 225 14% 11%;
+    --primary: 252 44% 48%;             /* #5B45B0 - Ungu khas Algonova */
     --primary-foreground: 0 0% 100%;
-    --secondary: 222 30% 18%;
-    --secondary-foreground: 210 40% 96%;
-    --muted: 222 30% 16%;
-    --muted-foreground: 215 20% 55%;
-    --accent: 191 91% 44%;
-    --accent-foreground: 0 0% 100%;
+    --secondary: 225 18% 94%;           /* #ECEEF3 - Header tabel & hover ringan */
+    --secondary-foreground: 225 14% 11%;
+    --muted: 225 18% 94%;
+    --muted-foreground: 225 8% 47%;     /* #6E7382 - Subjudul & label abu-abu */
+    --accent: 253 56% 94%;              /* #EAE6F8 - Highlight lembut */
+    --accent-foreground: 252 44% 48%;
     --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 222 30% 18%;
-    --input: 222 30% 16%;
-    --ring: 262 83% 58%;
-    --chart-1: 262 83% 58%;
-    --chart-2: 191 91% 44%;
-    --chart-3: 142 71% 45%;
-    --chart-4: 43 96% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 228 20% 91%;              /* #E2E4EC - Garis batas card & tabel */
+    --input: 228 20% 91%;
+    --ring: 252 44% 48%;
+    --chart-1: 252 44% 48%;
+    --chart-2: 191 91% 40%;
+    --chart-3: 142 71% 40%;
+    --chart-4: 38 92% 50%;
     --chart-5: 0 84% 60%;
     --radius: 0.75rem;
-    --sidebar-background: 222 47% 5%;
-    --sidebar-foreground: 210 40% 80%;
-    --sidebar-primary: 262 83% 58%;
+
+    /* Sidebar Putih Bersih */
+    --sidebar-background: 0 0% 100%;    /* #FFFFFF - Latar sidebar putih */
+    --sidebar-foreground: 225 10% 35%;  /* #505565 - Teks menu sidebar */
+    --sidebar-primary: 252 44% 48%;     /* #5B45B0 - Ikon & aksen aktif */
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 222 30% 14%;
-    --sidebar-accent-foreground: 210 40% 96%;
-    --sidebar-border: 222 30% 14%;
-    --sidebar-ring: 262 83% 58%;
+    --sidebar-accent: 253 56% 95%;      /* #EFEBFB - Background menu aktif */
+    --sidebar-accent-foreground: 252 44% 48%;
+    --sidebar-border: 228 20% 91%;      /* #E2E4EC - Garis pemisah sidebar */
+    --sidebar-ring: 252 44% 48%;
   }
 }
 
@@ -52,10 +54,10 @@
 }
 
 .glow-purple {
-  box-shadow: 0 0 20px rgba(124, 58, 237, 0.3);
+  box-shadow: 0 4px 14px rgba(91, 69, 176, 0.15);
 }
 .glow-cyan {
-  box-shadow: 0 0 20px rgba(6, 182, 212, 0.3);
+  box-shadow: 0 4px 14px rgba(6, 182, 212, 0.15);
 }
 
 /* ReactQuill auto-resize for referral dialog */
@@ -65,7 +67,7 @@
   overflow-y: auto !important;
   font-size: 15px;
   border: none !important;
-  background: hsl(var(--background)) !important;
+  background: hsl(var(--card)) !important;
 }
 .ql-editor.ql-blank::before {
   font-size: 15px;
@@ -73,7 +75,7 @@
 }
 .ql-toolbar.ql-snow {
   border: none !important;
-  background: hsl(var(--card)) !important;
+  background: hsl(var(--secondary)) !important;
   border-bottom: 1px solid hsl(var(--border)) !important;
   padding: 8px !important;
 }
@@ -110,6 +112,6 @@
   border-radius: 4px !important;
 }
 .ql-container.ql-snow .ql-editor {
-  background: hsl(var(--background)) !important;
+  background: hsl(var(--card)) !important;
   color: hsl(var(--foreground)) !important;
 }
