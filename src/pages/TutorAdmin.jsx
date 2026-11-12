@@ -106,21 +106,34 @@ export default function TutorAdmin() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [recRes, userRes] = await Promise.all([
-        supabase
+      // Ambil seluruh record bertahap per 1.000 baris agar tidak terpotong limit default API Supabase
+      let allRecords = [];
+      let from = 0;
+      const step = 1000;
+
+      while (true) {
+        const { data, error } = await supabase
           .from('BoScheduleRecord')
           .select('*')
           .order('lesson_date', { ascending: false })
-          .limit(5000),
-        supabase
-          .from('CustomUser')
-          .select('id, full_name, role, is_active')
-          .in('role', ['Tutor', 'Team Leader']),
-      ]);
+          .order('unique_key', { ascending: true })
+          .range(from, from + step - 1);
 
-      if (recRes.error) throw recRes.error;
-      setRecords(recRes.data || []);
-      setTutors((userRes.data || []).filter((u) => u.is_active !== false));
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+
+        allRecords = allRecords.concat(data);
+        if (data.length < step) break;
+        from += step;
+      }
+
+      const { data: userData } = await supabase
+        .from('CustomUser')
+        .select('id, full_name, role, is_active')
+        .in('role', ['Tutor', 'Team Leader']);
+
+      setRecords(allRecords);
+      setTutors((userData || []).filter((u) => u.is_active !== false));
     } catch (err) {
       toast.error('Gagal memuat data Tutor Administration', { description: err.message });
     } finally {
@@ -634,7 +647,7 @@ export default function TutorAdmin() {
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground pt-1">
           <span>
-            Menampilkan <strong>{filteredRecords.length}</strong> jadwal ({conductedRecords.length} lessons conducted valid)
+            Menampilkan <strong>{filteredRecords.length}</strong> jadwal ({conductedRecords.length} lessons conducted valid) · Total database: {records.length} baris
           </span>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
