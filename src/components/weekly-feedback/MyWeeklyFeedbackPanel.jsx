@@ -10,14 +10,16 @@ export default function MyWeeklyFeedbackPanel() {
   const { currentUser } = useAppAuth();
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState('');
+  const [busyKey, setBusyKey] = useState('');
+
+  const getRowKey = (item, idx = 0) =>
+    item.id || `${item.class_name || item.student_name}-${item.week_start_date}-${idx}`;
 
   const loadMyAssignments = async () => {
     if (!currentUser?.id && !currentUser?.full_name) return;
     setLoading(true);
 
     try {
-      // 1. Fetch dari tabel yang benar: WeeklyFeedbackAssignment
       const { data, error } = await supabase
         .from('WeeklyFeedbackAssignment')
         .select('*')
@@ -26,12 +28,13 @@ export default function MyWeeklyFeedbackPanel() {
       if (error) throw error;
 
       if (data) {
-        // 2. Filter tugas berdasarkan ID Tutor ATAU Nama Tutor yang sedang login
         const myData = data.filter((item) => {
           const isMyId = item.tutor_id && String(item.tutor_id) === String(currentUser.id);
-          const isMyName = item.tutor_name && 
-            item.tutor_name.toLowerCase().trim() === (currentUser.full_name || currentUser.name || '').toLowerCase().trim();
-          
+          const isMyName =
+            item.tutor_name &&
+            item.tutor_name.toLowerCase().trim() ===
+              (currentUser.full_name || currentUser.name || '').toLowerCase().trim();
+
           return isMyId || isMyName;
         });
 
@@ -48,26 +51,58 @@ export default function MyWeeklyFeedbackPanel() {
     loadMyAssignments();
   }, [currentUser?.id, currentUser?.full_name]);
 
-  const handleMarkComplete = async (item) => {
-    setBusyId(item.id);
+  const handleMarkComplete = async (item, idx) => {
+    const key = getRowKey(item, idx);
+    setBusyKey(key);
+
     try {
-      const { error } = await supabase
+      const completedAt = new Date().toISOString();
+      const completedBy = currentUser?.full_name || currentUser?.name || 'Tutor';
+
+      let query = supabase
         .from('WeeklyFeedbackAssignment')
         .update({
           status: 'completed',
-          completed_by_name: currentUser?.full_name || currentUser?.name || 'Tutor',
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', item.id);
+          completed_by_name: completedBy,
+          completed_at: completedAt,
+        });
 
+      if (item.id) {
+        query = query.eq('id', item.id);
+      } else {
+        if (item.class_name) query = query.eq('class_name', item.class_name);
+        if (item.week_start_date) query = query.eq('week_start_date', item.week_start_date);
+        if (item.tutor_name) query = query.eq('tutor_name', item.tutor_name);
+      }
+
+      const { data: updatedRows, error } = await query.select();
       if (error) throw error;
 
+      if (!updatedRows || updatedRows.length === 0) {
+        throw new Error(
+          'Data tidak ter-update di database (cek RLS atau kolom id pada tabel WeeklyFeedbackAssignment).'
+        );
+      }
+
+      setAssignments((prev) =>
+        prev.map((row, i) =>
+          getRowKey(row, i) === key
+            ? {
+                ...row,
+                status: 'completed',
+                completed_by_name: completedBy,
+                completed_at: completedAt,
+              }
+            : row
+        )
+      );
+
       toast.success('Feedback assignment completed');
-      loadMyAssignments();
+      await loadMyAssignments();
     } catch (err) {
       toast.error('Failed to update status', { description: err.message });
     } finally {
-      setBusyId('');
+      setBusyKey('');
     }
   };
 
@@ -82,7 +117,9 @@ export default function MyWeeklyFeedbackPanel() {
           <h2 className="font-semibold text-foreground">My Student Feedback</h2>
         </div>
         <div className="text-xs text-muted-foreground flex items-center gap-2">
-          <span><strong className="text-foreground">{pendingAssignments.length}</strong> to do</span>
+          <span>
+            <strong className="text-foreground">{pendingAssignments.length}</strong> to do
+          </span>
           <span>•</span>
           <span className="text-emerald-500 font-medium">{completedAssignments.length} done</span>
         </div>
@@ -98,13 +135,14 @@ export default function MyWeeklyFeedbackPanel() {
         </div>
       ) : (
         <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
-          {assignments.map((item) => {
+          {assignments.map((item, idx) => {
             const st = assignmentStatus(item);
             const isDone = st === 'completed';
+            const key = getRowKey(item, idx);
 
             return (
               <div
-                key={item.id}
+                key={key}
                 className="flex items-center justify-between bg-secondary/40 border border-border/60 rounded-xl p-3 hover:bg-secondary/70 transition-colors"
               >
                 <div className="space-y-0.5">
@@ -130,11 +168,11 @@ export default function MyWeeklyFeedbackPanel() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => handleMarkComplete(item)}
-                    disabled={busyId === item.id}
+                    onClick={() => handleMarkComplete(item, idx)}
+                    disabled={busyKey === key}
                     className="h-8 px-2.5 text-xs text-chart-3 hover:bg-chart-3/15 gap-1.5 shrink-0"
                   >
-                    {busyId === item.id ? (
+                    {busyKey === key ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <Check className="w-3.5 h-3.5" />
