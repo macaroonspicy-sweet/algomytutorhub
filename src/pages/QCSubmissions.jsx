@@ -621,7 +621,7 @@ export default function QCSubmissions() {
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Catatan / Nama Kelas</label>
                 <Input
-                  placeholder="Contoh: MY 1-1 VP 020 - Lesson 4"
+                  placeholder="-"
                   value={createForm.notes}
                   onChange={(e) => setCreateForm({ ...createForm, notes: e.target.value })}
                 />
