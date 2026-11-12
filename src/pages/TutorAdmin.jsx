@@ -8,7 +8,6 @@ import {
 } from '@/lib/boCsvParser';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -21,7 +20,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from '@/components/ui/dialog';
 import Pagination from '@/components/ui/pagination';
 import {
@@ -33,12 +31,11 @@ import {
   CalendarCheck,
   Sparkles,
   Percent,
-  BellRing,
+  Bell,
   Search,
   CheckCircle2,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import * as XLSX from 'xlsx';
 
 const MONTHS = [
   { value: '1', label: 'January' },
@@ -90,7 +87,6 @@ export default function TutorAdmin() {
   const [tutors, setTutors] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Filters
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedWeek, setSelectedWeek] = useState('all');
@@ -99,11 +95,9 @@ export default function TutorAdmin() {
   const [search, setSearch] = useState('');
   const [includeTest, setIncludeTest] = useState(false);
 
-  // Tabs & Pagination
   const [activeTab, setActiveTab] = useState('overview');
   const [page, setPage] = useState(1);
 
-  // Import Dialog State
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState(null);
   const [cutoffDate, setCutoffDate] = useState(() => getNextMondayISO());
@@ -138,7 +132,6 @@ export default function TutorAdmin() {
     loadData();
   }, []);
 
-  // Daftar opsi unik untuk dropdown filter
   const courseOptions = useMemo(() => {
     const set = new Set(records.map((r) => r.course).filter(Boolean));
     return Array.from(set).sort();
@@ -149,7 +142,6 @@ export default function TutorAdmin() {
     return Array.from(set).sort();
   }, [records]);
 
-  // Filter utama berdasarkan Bulan, Tahun, Minggu, Course, Tutor, Search
   const filteredRecords = useMemo(() => {
     return records.filter((r) => {
       if (!includeTest && r.is_test_group) return false;
@@ -180,7 +172,6 @@ export default function TutorAdmin() {
     setPage(1);
   }, [selectedMonth, selectedYear, selectedWeek, selectedCourse, selectedTutor, search, includeTest, activeTab]);
 
-  // 1. Rekap Lessons Conducted & Attendance
   const conductedRecords = useMemo(
     () => filteredRecords.filter((r) => r.is_conducted),
     [filteredRecords]
@@ -192,7 +183,6 @@ export default function TutorAdmin() {
     return Math.round(sum / conductedRecords.length);
   }, [conductedRecords]);
 
-  // 2. Rekap Group Classes & Kids per Class
   const groupClasses = useMemo(() => {
     const map = new Map();
     for (const r of filteredRecords) {
@@ -246,7 +236,6 @@ export default function TutorAdmin() {
     [groupClasses]
   );
 
-  // 3. Rekap Weekly (Week 1 - Week 4)
   const weeklySummary = useMemo(() => {
     return WEEKS.map((wk) => {
       const rows = filteredRecords.filter((r) => r.week_label === wk);
@@ -272,7 +261,6 @@ export default function TutorAdmin() {
     });
   }, [filteredRecords]);
 
-  // 4. Rekap per Course (Classes, Lessons Conducted, Kids)
   const courseSummary = useMemo(() => {
     const map = new Map();
     for (const cls of groupClasses) {
@@ -293,7 +281,6 @@ export default function TutorAdmin() {
     return Array.from(map.values()).sort((a, b) => b.kids_count - a.kids_count);
   }, [groupClasses]);
 
-  // 5. Rekap Lesson 1 Bulan Ini (Course apa saja & berapa)
   const lesson1Records = useMemo(() => {
     return filteredRecords
       .filter((r) => !r.is_test_group && r.lesson_number === 1)
@@ -320,13 +307,14 @@ export default function TutorAdmin() {
     return Array.from(map.values()).sort((a, b) => b.total_classes - a.total_classes);
   }, [lesson1Records]);
 
-  // 6. Kelas Lesson Kelipatan 4 pada view saat ini
   const multiple4Count = useMemo(
-    () => filteredRecords.filter((r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0).length,
+    () =>
+      filteredRecords.filter(
+        (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
+      ).length,
     [filteredRecords]
   );
 
-  // Helper pencocokan nama tutor dari BO ke CustomUser
   const matchTutorUser = (teacherName) => {
     if (!teacherName) return null;
     const clean = teacherName.toLowerCase().trim();
@@ -341,7 +329,6 @@ export default function TutorAdmin() {
     );
   };
 
-  // Proses Import CSV/Excel + Auto-Assign Weekly Report kelipatan 4 mulai cutoffDate
   const handleImportSubmit = async () => {
     if (!importFile) {
       toast.error('Pilih file CSV atau Excel dari BO terlebih dahulu');
@@ -357,7 +344,6 @@ export default function TutorAdmin() {
         return;
       }
 
-      // 1. Upsert ke BoScheduleRecord dalam batch 300 baris
       const chunkSize = 300;
       for (let i = 0; i < parsed.length; i += chunkSize) {
         const batch = parsed.slice(i, i + chunkSize).map((item) => ({
@@ -372,7 +358,6 @@ export default function TutorAdmin() {
         if (upsertErr) throw upsertErr;
       }
 
-      // 2. Auto-generate Weekly Report task untuk lesson kelipatan 4 mulai cutoffDate (minggu depan)
       const eligibleKelipatan4 = parsed.filter(
         (r) =>
           !r.is_test_group &&
@@ -383,10 +368,9 @@ export default function TutorAdmin() {
 
       let assignedCount = 0;
       if (eligibleKelipatan4.length > 0) {
-        // Cek task yang sudah ada agar tidak dobel jika import ulang
         const { data: existingTasks } = await supabase
           .from('TutorTask')
-          .select('title, linked_class_name, deadline')
+          .select('title, linked_class_name')
           .eq('category', 'Student Feedback');
 
         const existingSignatures = new Set(
@@ -463,106 +447,105 @@ export default function TutorAdmin() {
     }
   };
 
-  // Export Excel Multi-Sheet
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (!filteredRecords.length) {
       toast.error('Tidak ada data pada filter saat ini untuk di-export');
       return;
     }
 
-    const wb = XLSX.utils.book_new();
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
 
-    // Sheet 1: Weekly & Course Summary
-    const sheet1Rows = [
-      ...weeklySummary.map((w) => ({
-        Section: 'Weekly Breakdown',
-        Item: w.week,
-        'Total Scheduled': w.scheduled,
-        'Lessons Conducted': w.conducted,
-        Group: w.groupCount,
-        Individual: w.indivCount,
-        Intensive: w.intensCount,
-        'Students Attended': w.totalAttended,
-        'Avg Attendance (%)': `${w.avgAtt}%`,
-      })),
-      {},
-      ...courseSummary.map((c) => ({
-        Section: 'Course Distribution',
-        Item: c.course,
-        'Total Scheduled': '-',
-        'Lessons Conducted': c.conducted_lessons,
-        Group: `${c.class_count} classes`,
-        Individual: `${c.kids_count} kids`,
-        Intensive: '-',
-        'Students Attended': c.kids_count,
-        'Avg Attendance (%)': '-',
-      })),
-    ];
-    const ws1 = XLSX.utils.json_to_sheet(sheet1Rows);
-    XLSX.utils.book_append_sheet(wb, ws1, 'Weekly & Course Summary');
+      const sheet1Rows = [
+        ...weeklySummary.map((w) => ({
+          Section: 'Weekly Breakdown',
+          Item: w.week,
+          'Total Scheduled': w.scheduled,
+          'Lessons Conducted': w.conducted,
+          Group: w.groupCount,
+          Individual: w.indivCount,
+          Intensive: w.intensCount,
+          'Students Attended': w.totalAttended,
+          'Avg Attendance (%)': `${w.avgAtt}%`,
+        })),
+        {},
+        ...courseSummary.map((c) => ({
+          Section: 'Course Distribution',
+          Item: c.course,
+          'Total Scheduled': '-',
+          'Lessons Conducted': c.conducted_lessons,
+          Group: `${c.class_count} classes`,
+          Individual: `${c.kids_count} kids`,
+          Intensive: '-',
+          'Students Attended': c.kids_count,
+          'Avg Attendance (%)': '-',
+        })),
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet1Rows), 'Weekly & Course Summary');
 
-    // Sheet 2: Group Classes & Kids
-    const ws2 = XLSX.utils.json_to_sheet(
-      groupClasses.map((c, i) => ({
-        No: i + 1,
-        'Group ID': c.group_id,
-        'Group Title': c.group_title,
-        Type: c.group_type,
-        Course: c.course,
-        Teacher: c.teacher,
-        'Kids Count': c.kids_count,
-        'Lessons Conducted': c.conducted_count,
-        'Latest Lesson': c.latest_lesson,
-        'Avg Attendance (%)': `${c.avg_attendance}%`,
-      }))
-    );
-    XLSX.utils.book_append_sheet(wb, ws2, 'Group Classes & Kids');
+      const ws2 = XLSX.utils.json_to_sheet(
+        groupClasses.map((c, i) => ({
+          No: i + 1,
+          'Group ID': c.group_id,
+          'Group Title': c.group_title,
+          Type: c.group_type,
+          Course: c.course,
+          Teacher: c.teacher,
+          'Kids Count': c.kids_count,
+          'Lessons Conducted': c.conducted_count,
+          'Latest Lesson': c.latest_lesson,
+          'Avg Attendance (%)': `${c.avg_attendance}%`,
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws2, 'Group Classes & Kids');
 
-    // Sheet 3: Lesson 1 New Classes
-    const ws3 = XLSX.utils.json_to_sheet(
-      lesson1Records.map((r, i) => ({
-        No: i + 1,
-        Date: r.lesson_date,
-        Time: r.lesson_time,
-        'Group ID': r.group_id,
-        'Group Title': r.group_title,
-        Course: r.course,
-        Type: r.group_type,
-        Teacher: r.lesson_teacher || '-',
-        Kids: Math.max(r.students_count || 0, r.students_attended || 0),
-        Status: r.is_conducted ? 'Conducted' : 'Not Conducted',
-      }))
-    );
-    XLSX.utils.book_append_sheet(wb, ws3, 'Lesson 1 Classes');
+      const ws3 = XLSX.utils.json_to_sheet(
+        lesson1Records.map((r, i) => ({
+          No: i + 1,
+          Date: r.lesson_date,
+          Time: r.lesson_time,
+          'Group ID': r.group_id,
+          'Group Title': r.group_title,
+          Course: r.course,
+          Type: r.group_type,
+          Teacher: r.lesson_teacher || '-',
+          Kids: Math.max(r.students_count || 0, r.students_attended || 0),
+          Status: r.is_conducted ? 'Conducted' : 'Not Conducted',
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws3, 'Lesson 1 Classes');
 
-    // Sheet 4: Raw Schedule Data
-    const ws4 = XLSX.utils.json_to_sheet(
-      filteredRecords.map((r, i) => ({
-        No: i + 1,
-        Date: r.lesson_date,
-        Time: r.lesson_time,
-        Week: r.week_label,
-        Lesson: r.lesson_number,
-        'Lesson Title': r.lesson_title,
-        'Group ID': r.group_id,
-        'Group Title': r.group_title,
-        'Attendance (%)': `${r.attendance_pct}%`,
-        Students: r.students_raw,
-        Attended: r.students_attended,
-        Teacher: r.lesson_teacher || '-',
-        Type: r.group_type,
-        Course: r.course,
-        Conducted: r.is_conducted ? 'Yes' : 'No',
-      }))
-    );
-    XLSX.utils.book_append_sheet(wb, ws4, 'Raw Schedule');
+      const ws4 = XLSX.utils.json_to_sheet(
+        filteredRecords.map((r, i) => ({
+          No: i + 1,
+          Date: r.lesson_date,
+          Time: r.lesson_time,
+          Week: r.week_label,
+          Lesson: r.lesson_number,
+          'Lesson Title': r.lesson_title,
+          'Group ID': r.group_id,
+          'Group Title': r.group_title,
+          'Attendance (%)': `${r.attendance_pct}%`,
+          Students: r.students_raw,
+          Attended: r.students_attended,
+          Teacher: r.lesson_teacher || '-',
+          Type: r.group_type,
+          Course: r.course,
+          Conducted: r.is_conducted ? 'Yes' : 'No',
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws4, 'Raw Schedule');
 
-    const monthLabel =
-      selectedMonth === 'all'
-        ? 'AllMonths'
-        : MONTHS.find((m) => m.value === selectedMonth)?.label || selectedMonth;
-    XLSX.writeFile(wb, `Tutor_Administration_${monthLabel}_${selectedYear}.xlsx`);
-    toast.success('File Excel Tutor Administration berhasil diunduh');
+      const monthLabel =
+        selectedMonth === 'all'
+          ? 'AllMonths'
+          : MONTHS.find((m) => m.value === selectedMonth)?.label || selectedMonth;
+      XLSX.writeFile(wb, `Tutor_Administration_${monthLabel}_${selectedYear}.xlsx`);
+      toast.success('File Excel Tutor Administration berhasil diunduh');
+    } catch (err) {
+      toast.error('Gagal export Excel', { description: err.message });
+    }
   };
 
   const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
@@ -570,7 +553,6 @@ export default function TutorAdmin() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Tutor Administration</h1>
@@ -588,7 +570,6 @@ export default function TutorAdmin() {
         </div>
       </div>
 
-      {/* Filter Bar */}
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
@@ -667,53 +648,15 @@ export default function TutorAdmin() {
         </div>
       </div>
 
-      {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-        <KpiCard
-          label="Lessons Conducted"
-          value={conductedRecords.length}
-          sub={`dari ${filteredRecords.length} jadwal`}
-          icon={CalendarCheck}
-          tone="bg-primary"
-        />
-        <KpiCard
-          label="Active Classes"
-          value={groupClasses.length}
-          sub="Group / Indiv / Intensive"
-          icon={BookOpen}
-          tone="bg-chart-3"
-        />
-        <KpiCard
-          label="Total Kids"
-          value={totalKids}
-          sub="Akumulasi siswa per kelas"
-          icon={Users}
-          tone="bg-accent"
-        />
-        <KpiCard
-          label="Lesson 1 Bulan Ini"
-          value={lesson1Records.length}
-          sub={`${lesson1ByCourse.length} course berbeda`}
-          icon={Sparkles}
-          tone="bg-chart-4"
-        />
-        <KpiCard
-          label="Avg Attendance"
-          value={`${avgAttendance}%`}
-          sub="Rata-rata kelas terlaksana"
-          icon={Percent}
-          tone="bg-chart-2"
-        />
-        <KpiCard
-          label="Lesson Kelipatan 4"
-          value={multiple4Count}
-          sub="Lesson 4, 8, 12, 16..."
-          icon={BellRing}
-          tone="bg-chart-5"
-        />
+        <KpiCard label="Lessons Conducted" value={conductedRecords.length} sub={`dari ${filteredRecords.length} jadwal`} icon={CalendarCheck} tone="bg-primary" />
+        <KpiCard label="Active Classes" value={groupClasses.length} sub="Group / Indiv / Intensive" icon={BookOpen} tone="bg-chart-3" />
+        <KpiCard label="Total Kids" value={totalKids} sub="Akumulasi siswa per kelas" icon={Users} tone="bg-accent" />
+        <KpiCard label="Lesson 1 Bulan Ini" value={lesson1Records.length} sub={`${lesson1ByCourse.length} course berbeda`} icon={Sparkles} tone="bg-chart-4" />
+        <KpiCard label="Avg Attendance" value={`${avgAttendance}%`} sub="Rata-rata kelas terlaksana" icon={Percent} tone="bg-chart-2" />
+        <KpiCard label="Lesson Kelipatan 4" value={multiple4Count} sub="Lesson 4, 8, 12, 16..." icon={Bell} tone="bg-chart-5" />
       </div>
 
-      {/* Navigation Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-border pb-2">
         {[
           { id: 'overview', label: 'Weekly & Course Summary' },
@@ -741,10 +684,8 @@ export default function TutorAdmin() {
         </div>
       ) : (
         <>
-          {/* TAB 1: WEEKLY & COURSE SUMMARY */}
           {activeTab === 'overview' && (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              {/* Weekly Attendance Breakdown */}
               <div className="bg-card border border-border rounded-2xl p-5">
                 <h2 className="font-semibold text-foreground mb-1">Attendance & Lessons per Minggu</h2>
                 <p className="text-xs text-muted-foreground mb-4">
@@ -780,7 +721,6 @@ export default function TutorAdmin() {
                 </div>
               </div>
 
-              {/* Course Distribution */}
               <div className="bg-card border border-border rounded-2xl p-5">
                 <h2 className="font-semibold text-foreground mb-1">Distribusi Kelas & Kids per Course</h2>
                 <p className="text-xs text-muted-foreground mb-4">
@@ -818,7 +758,6 @@ export default function TutorAdmin() {
             </div>
           )}
 
-          {/* TAB 2: GROUP CLASSES & KIDS */}
           {activeTab === 'classes' && (
             <div className="bg-card border border-border rounded-2xl overflow-hidden">
               <div className="overflow-x-auto">
@@ -876,10 +815,8 @@ export default function TutorAdmin() {
             </div>
           )}
 
-          {/* TAB 3: LESSON 1 BULAN INI */}
           {activeTab === 'lesson1' && (
             <div className="space-y-5">
-              {/* Ringkasan Course Lesson 1 */}
               <div className="bg-card border border-border rounded-2xl p-5">
                 <h2 className="font-semibold text-foreground mb-3">Rekap Course Lesson 1 (Kelas Baru)</h2>
                 {lesson1ByCourse.length === 0 ? (
@@ -892,15 +829,9 @@ export default function TutorAdmin() {
                           {item.course}
                         </div>
                         <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                          <span>
-                            Total: <strong className="text-foreground">{item.total_classes}</strong> kelas
-                          </span>
-                          <span>
-                            Conducted: <strong className="text-chart-3">{item.conducted_classes}</strong>
-                          </span>
-                          <span>
-                            Kids: <strong className="text-primary">{item.total_kids}</strong>
-                          </span>
+                          <span>Total: <strong className="text-foreground">{item.total_classes}</strong> kelas</span>
+                          <span>Conducted: <strong className="text-chart-3">{item.conducted_classes}</strong></span>
+                          <span>Kids: <strong className="text-primary">{item.total_kids}</strong></span>
                         </div>
                       </div>
                     ))}
@@ -908,7 +839,6 @@ export default function TutorAdmin() {
                 )}
               </div>
 
-              {/* Detail Kelas Lesson 1 */}
               <div className="bg-card border border-border rounded-2xl overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -964,7 +894,6 @@ export default function TutorAdmin() {
             </div>
           )}
 
-          {/* TAB 4: RAW SCHEDULE LOG */}
           {activeTab === 'raw' && (
             <div className="space-y-4">
               <div className="bg-card border border-border rounded-2xl overflow-hidden">
@@ -1044,21 +973,22 @@ export default function TutorAdmin() {
         </>
       )}
 
-      {/* Modal Import CSV / Excel BO */}
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent className="bg-card border-border max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-foreground">
               <Upload className="w-5 h-5 text-primary" /> Import Schedule BO LMS
             </DialogTitle>
-            <DialogDescription>
+            <p className="text-sm text-muted-foreground">
               Upload file CSV atau Excel export dari BO LMS. Data akan otomatis direkap ke dashboard.
-            </DialogDescription>
+            </p>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label className="text-sm text-foreground/80">File Schedule BO (.csv / .xlsx)</Label>
+              <label className="text-sm font-medium text-foreground/80 block">
+                File Schedule BO (.csv / .xlsx)
+              </label>
               <Input
                 type="file"
                 accept=".csv,.xlsx,.xls"
@@ -1073,9 +1003,9 @@ export default function TutorAdmin() {
             </div>
 
             <div className="bg-secondary/40 border border-border rounded-xl p-3.5 space-y-2">
-              <Label className="text-xs font-semibold text-foreground">
+              <label className="text-xs font-semibold text-foreground block">
                 Mulai Auto-Assign Weekly Report (Lesson 4, 8, 12, ...)
-              </Label>
+              </label>
               <Input
                 type="date"
                 value={cutoffDate}
