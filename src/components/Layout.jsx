@@ -1,113 +1,239 @@
-import '@/api/base44Client';
-import { Toaster } from "@/components/ui/toaster"
-import { Toaster as SonnerToaster } from 'sonner'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
-import PageNotFound from './lib/PageNotFound';
-import { AuthProvider, useAuth } from '@/lib/AuthContext';
-import { AppAuthProvider, useAppAuth } from '@/lib/AppAuthContext';
-import UserNotRegisteredError from '@/components/UserNotRegisteredError';
+import React, { useState } from 'react';
+import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
+import { useAppAuth } from '@/lib/AppAuthContext';
+import {
+  LayoutDashboard, Users, MessageSquare, BookOpen,
+  CheckSquare, ChevronDown, ChevronRight,
+  LogOut, User, Menu, ClipboardList, CalendarCheck, BarChart3
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import NotificationBell from '@/components/NotificationBell';
 
-// Pages
-import Login from '@/pages/Login';
-import Layout from '@/components/Layout';
-import Dashboard from '@/pages/Dashboard';
-import AdminPage from '@/pages/admin/AdminPage';
-import StudentFeedback from '@/pages/StudentFeedback';
-import WeeklyFeedback from '@/pages/WeeklyFeedback';
-import QCSubmissions from '@/pages/QCSubmissions';
-import Tasks from '@/pages/Tasks';
-import TutorAdmin from '@/pages/TutorAdmin';
-import CoursesCategory from '@/pages/categories/CoursesCategory';
+const navItems = [
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/', rbac: 'dashboard' },
+  { key: 'admin', label: 'User List', icon: Users, path: '/admin/users', rbac: 'admin_crud' },
+  { key: 'student-feedback', label: 'Student Feedback', icon: MessageSquare, path: '/student-feedback', rbac: 'student_feedback' },
+  { key: 'weekly-feedback', label: 'Weekly Feedback', icon: CalendarCheck, path: '/weekly-feedback', rbac: 'weekly_feedback' },
+  { key: 'tasks', label: 'Task Management', icon: ClipboardList, path: '/tasks', rbac: 'task_management' },
+  { key: 'tutor-admin', label: 'Tutor Administration', icon: BarChart3, path: '/tutor-admin', rbac: 'task_management' },
+  {
+    key: 'qc', 
+    label: 'QC Tutor', 
+    icon: CheckSquare, 
+    children: [
+      { label: 'QC Records', path: '/admin/qc-tutor', rbac: 'qc_records' },
+      { label: 'Monthly Evaluation', path: '/admin/qc-monthly', rbac: 'qc_monthly' },
+      { label: 'QC Submissions', path: '/qc/submissions' },
+    ]
+  },
+  {
+    key: 'categories', label: 'Categories', icon: BookOpen,
+    rbac: ['category_courses', 'category_qc', 'category_module', 'pdf_settings'],
+    children: [
+      { label: 'Courses', path: '/categories/courses', rbac: 'category_courses' },
+      { label: 'QC Aspects', path: '/categories/qc-aspects', rbac: 'category_qc' },
+      { label: 'Module', path: '/categories/module', rbac: 'category_module' },
+      { label: 'Student Performance', path: '/categories/student-performance', rbac: 'category_module' },
+      { label: 'PDF Settings', path: '/categories/pdf-settings', rbac: 'pdf_settings' },
+    ]
+  },
+];
 
-import MyProfile from '@/pages/MyProfile';
-import QCMonthlyPage from '@/pages/admin/QCMonthlyPage';
-import QCTutor from '@/pages/admin/QCTutor';
-import QCEvaluationAspectPage from '@/pages/categories/QCEvaluationAspectPage';
-import MyQCEvaluations from '@/pages/MyQCEvaluations';
-import ModuleCategoryPage from '@/pages/categories/ModuleCategory';
-import StudentPerformanceCategoryPage from '@/pages/categories/StudentPerformanceCategory';
-import PdfSettings from '@/pages/categories/PdfSettings';
-import UnauthorizedPage from '@/pages/Unauthorized';
-
-function ProtectedAppLayout() {
-  const { currentUser, isLoadingAppAuth } = useAppAuth();
-  if (isLoadingAppAuth) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-background">
-        <div className="w-8 h-8 border-4 border-secondary border-t-primary rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-  if (!currentUser) return <Navigate to="/login" replace />;
-  return <Layout />;
-}
-
-function RbacRoute({ rbacKey, children }) {
+function NavItem({ item, collapsed, openKey, onToggle }) {
+  const location = useLocation();
   const { hasPermission } = useAppAuth();
-  if (!hasPermission(rbacKey)) return <Navigate to="/unauthorized" replace />;
-  return children;
-}
 
-const AuthenticatedApp = () => {
-  const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
+  if (item.children) {
+    const visibleChildren = item.children.filter(c => !c.rbac || hasPermission(c.rbac));
+    if (visibleChildren.length === 0) return null;
 
-  if (isLoadingPublicSettings || isLoadingAuth) {
+    const isAnyActive = visibleChildren.some(c => location.pathname === c.path);
+    const isOpen = openKey === item.key || isAnyActive;
     return (
-      <div className="fixed inset-0 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+      <div>
+        <button
+          onClick={() => onToggle(item.key)}
+          className={cn(
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
+            isAnyActive
+              ? 'bg-primary/10 text-primary font-semibold'
+              : 'text-sidebar-foreground hover:bg-secondary hover:text-foreground'
+          )}
+        >
+          <item.icon className="w-4 h-4 flex-shrink-0" />
+          {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
+          {!collapsed && (isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
+        </button>
+        {isOpen && !collapsed && (
+          <div className="ml-7 mt-1 space-y-1">
+            {visibleChildren.map(child => (
+              <Link
+                key={child.path}
+                to={child.path}
+                className={cn(
+                  'block px-3 py-2 rounded-lg text-sm transition-all duration-200',
+                  location.pathname === child.path
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-sidebar-foreground hover:bg-secondary hover:text-foreground'
+                )}
+              >
+                {child.label}
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
 
-  if (authError) {
-    if (authError.type === 'user_not_registered') return <UserNotRegisteredError />;
-    else if (authError.type === 'auth_required') { navigateToLogin(); return null; }
-  }
+  if (item.rbac && !hasPermission(item.rbac)) return null;
 
+  const isActive = location.pathname === item.path;
   return (
-    <AppAuthProvider>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route element={<ProtectedAppLayout />}>
-          <Route path="/" element={<RbacRoute rbacKey="dashboard"><Dashboard /></RbacRoute>} />
-          <Route path="/admin/users" element={<RbacRoute rbacKey="admin_crud"><AdminPage /></RbacRoute>} />
-          <Route path="/admin/qc-tutor" element={<RbacRoute rbacKey="qc_records"><QCTutor /></RbacRoute>} />
-          <Route path="/admin/qc-monthly" element={<RbacRoute rbacKey="qc_monthly"><QCMonthlyPage /></RbacRoute>} />
-          <Route path="/categories/qc-aspects" element={<RbacRoute rbacKey="category_qc"><QCEvaluationAspectPage /></RbacRoute>} />
-          <Route path="/student-feedback" element={<RbacRoute rbacKey="student_feedback"><StudentFeedback /></RbacRoute>} />
-          <Route path="/weekly-feedback" element={<RbacRoute rbacKey="weekly_feedback"><WeeklyFeedback /></RbacRoute>} />
-          <Route path="/qc/submissions" element={<RbacRoute rbacKey="qc_records"><QCSubmissions /></RbacRoute>} />
-          <Route path="/tasks" element={<RbacRoute rbacKey="task_management"><Tasks /></RbacRoute>} />
-          <Route path="/tutor-admin" element={<RbacRoute rbacKey="task_management"><TutorAdmin /></RbacRoute>} />
-          <Route path="/categories/courses" element={<RbacRoute rbacKey="category_courses"><CoursesCategory /></RbacRoute>} />
-
-          <Route path="/categories/module" element={<RbacRoute rbacKey="category_module"><ModuleCategoryPage /></RbacRoute>} />
-          <Route path="/categories/student-performance" element={<RbacRoute rbacKey="category_module"><StudentPerformanceCategoryPage /></RbacRoute>} />
-          <Route path="/categories/pdf-settings" element={<RbacRoute rbacKey="pdf_settings"><PdfSettings /></RbacRoute>} />
-          <Route path="/my-qc" element={<RbacRoute rbacKey="my_qc"><MyQCEvaluations /></RbacRoute>} />
-          <Route path="/unauthorized" element={<UnauthorizedPage />} />
-          <Route path="/profile" element={<MyProfile />} />
-        </Route>
-        <Route path="*" element={<PageNotFound />} />
-      </Routes>
-    </AppAuthProvider>
-  );
-};
-
-function App() {
-  return (
-    <AuthProvider>
-      <QueryClientProvider client={queryClientInstance}>
-        <Router>
-          <AuthenticatedApp />
-        </Router>
-        <Toaster />
-        <SonnerToaster position="bottom-right" richColors />
-      </QueryClientProvider>
-    </AuthProvider>
+    <Link
+      to={item.path}
+      className={cn(
+        'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
+        isActive
+          ? 'bg-primary/10 text-primary font-semibold'
+          : 'text-sidebar-foreground hover:bg-secondary hover:text-foreground'
+      )}
+    >
+      <item.icon className="w-4 h-4 flex-shrink-0" />
+      {!collapsed && <span>{item.label}</span>}
+    </Link>
   );
 }
 
-export default App;
+export default function Layout() {
+  const { currentUser, logout, hasPermission } = useAppAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  const [openNavKey, setOpenNavKey] = useState(null);
+  const handleNavToggle = (key) => setOpenNavKey(prev => prev === key ? null : key);
+
+  const SidebarContent = () => (
+    <div className="flex flex-col h-full bg-white">
+      <div className="flex items-center gap-3 px-4 py-5 border-b border-border">
+        <img
+          src="https://lh3.googleusercontent.com/d/1oZOXv5EMDbbZRXl6MuDcUVwkRAz0AvJM"
+          alt="Algonova"
+          className="w-9 h-9 rounded-lg object-contain flex-shrink-0"
+        />
+        {!collapsed && (
+          <div>
+            <div className="font-bold text-foreground text-sm">Algonova Malaysia</div>
+            <div className="text-xs text-muted-foreground">Management System</div>
+          </div>
+        )}
+      </div>
+
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {navItems.map(item => (
+          <NavItem key={item.key} item={item} collapsed={collapsed} openKey={openNavKey} onToggle={handleNavToggle} />
+        ))}
+        {hasPermission('my_qc') && (
+          <Link
+            to="/my-qc"
+            className={cn(
+              'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
+              location.pathname === '/my-qc'
+                ? 'bg-primary/10 text-primary font-semibold'
+                : 'text-sidebar-foreground hover:bg-secondary hover:text-foreground'
+            )}
+          >
+            <ClipboardList className="w-4 h-4 flex-shrink-0" />
+            {!collapsed && <span>My QC Results</span>}
+          </Link>
+        )}
+      </nav>
+
+      <div className="px-3 pb-4 space-y-1 border-t border-border pt-4">
+        <Link
+          to="/profile"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-sidebar-foreground hover:bg-secondary hover:text-foreground transition-all"
+        >
+          <User className="w-4 h-4 flex-shrink-0" />
+          {!collapsed && <span>My Profile</span>}
+        </Link>
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-destructive hover:bg-destructive/10 transition-all"
+        >
+          <LogOut className="w-4 h-4 flex-shrink-0" />
+          {!collapsed && <span>Logout</span>}
+        </button>
+      </div>
+
+      {!collapsed && currentUser && (
+        <div className="px-4 pb-4">
+          <div className="bg-secondary/70 border border-border rounded-xl p-3 flex items-center gap-3">
+            {currentUser.photo_url ? (
+              <img src={currentUser.photo_url} className="w-8 h-8 rounded-full object-cover" alt="" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-primary/15 flex items-center justify-center text-primary font-semibold text-sm">
+                {currentUser.full_name?.charAt(0) || 'U'}
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground truncate">{currentUser.full_name}</div>
+              <div className="text-xs text-muted-foreground truncate">{currentUser.role}</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen bg-background overflow-hidden">
+      <aside className={cn(
+        'hidden md:flex flex-col bg-white border-r border-border transition-all duration-300 flex-shrink-0',
+        collapsed ? 'w-16' : 'w-64'
+      )}>
+        <SidebarContent />
+      </aside>
+
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
+          <aside className="absolute left-0 top-0 bottom-0 w-64 bg-white border-r border-border">
+            <SidebarContent />
+          </aside>
+        </div>
+      )}
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-border px-4 py-3 flex items-center gap-3">
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="hidden md:flex items-center justify-center w-8 h-8 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-all"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg hover:bg-secondary"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          <div className="ml-auto">
+            <NotificationBell />
+          </div>
+        </header>
+
+        <main className="flex-1 overflow-y-auto p-6">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+}
