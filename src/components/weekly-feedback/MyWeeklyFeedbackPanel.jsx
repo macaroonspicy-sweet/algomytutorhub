@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
-import { MessageSquare, Check, Loader2 } from 'lucide-react';
+import { MessageSquare, Check, CalendarClock, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { assignmentStatus, fmtDate } from '@/lib/workflowUtils';
@@ -10,10 +10,16 @@ export default function MyWeeklyFeedbackPanel() {
   const { currentUser } = useAppAuth();
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [busyKey, setBusyKey] = useState('');
+  const [busyAction, setBusyAction] = useState('');
 
   const getRowKey = (item, idx = 0) =>
     item.id || `${item.class_name || item.student_name}-${item.week_start_date}-${idx}`;
+
+  const getEffectiveStatus = (item) => {
+    const raw = (item.status || '').toLowerCase().trim();
+    if (raw === 'rescheduled' || raw === 'postponed') return 'rescheduled';
+    return assignmentStatus(item);
+  };
 
   const loadMyAssignments = async () => {
     if (!currentUser?.id && !currentUser?.full_name) return;
@@ -51,20 +57,24 @@ export default function MyWeeklyFeedbackPanel() {
     loadMyAssignments();
   }, [currentUser?.id, currentUser?.full_name]);
 
-  const handleMarkComplete = async (item, idx) => {
+  const handleUpdateStatus = async (item, idx, targetStatus) => {
     const key = getRowKey(item, idx);
-    setBusyKey(key);
+    setBusyAction(`${key}:${targetStatus}`);
 
     try {
-      const completedAt = new Date().toISOString();
-      const completedBy = currentUser?.full_name || currentUser?.name || 'Tutor';
+      const actionAt = new Date().toISOString();
+      const actionBy = currentUser?.full_name || currentUser?.name || 'Tutor';
+      const isDoneTarget = targetStatus === 'completed';
 
       let query = supabase
         .from('WeeklyFeedbackAssignment')
         .update({
-          status: 'completed',
-          completed_by_name: completedBy,
-          completed_at: completedAt,
+          status: targetStatus,
+          is_done: isDoneTarget,
+          completed_by_name: actionBy,
+          completed_at: actionAt,
+          completed_date: isDoneTarget ? actionAt : null,
+          updated_date: actionAt,
         });
 
       if (item.id) {
@@ -89,25 +99,36 @@ export default function MyWeeklyFeedbackPanel() {
           getRowKey(row, i) === key
             ? {
                 ...row,
-                status: 'completed',
-                completed_by_name: completedBy,
-                completed_at: completedAt,
+                status: targetStatus,
+                is_done: isDoneTarget,
+                completed_by_name: actionBy,
+                completed_at: actionAt,
+                completed_date: isDoneTarget ? actionAt : null,
+                updated_date: actionAt,
               }
             : row
         )
       );
 
-      toast.success('Feedback assignment completed');
+      toast.success(
+        targetStatus === 'rescheduled'
+          ? 'Feedback marked as rescheduled'
+          : 'Feedback assignment completed'
+      );
       await loadMyAssignments();
     } catch (err) {
       toast.error('Failed to update status', { description: err.message });
     } finally {
-      setBusyKey('');
+      setBusyAction('');
     }
   };
 
-  const pendingAssignments = assignments.filter((a) => assignmentStatus(a) !== 'completed');
-  const completedAssignments = assignments.filter((a) => assignmentStatus(a) === 'completed');
+  const pendingAssignments = assignments.filter((a) => {
+    const st = getEffectiveStatus(a);
+    return st !== 'completed' && st !== 'rescheduled';
+  });
+  const completedAssignments = assignments.filter((a) => getEffectiveStatus(a) === 'completed');
+  const rescheduledAssignments = assignments.filter((a) => getEffectiveStatus(a) === 'rescheduled');
 
   return (
     <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
@@ -122,6 +143,14 @@ export default function MyWeeklyFeedbackPanel() {
           </span>
           <span>•</span>
           <span className="text-emerald-500 font-medium">{completedAssignments.length} done</span>
+          {rescheduledAssignments.length > 0 && (
+            <>
+              <span>•</span>
+              <span className="text-amber-500 font-medium">
+                {rescheduledAssignments.length} rescheduled
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -136,21 +165,31 @@ export default function MyWeeklyFeedbackPanel() {
       ) : (
         <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
           {assignments.map((item, idx) => {
-            const st = assignmentStatus(item);
+            const st = getEffectiveStatus(item);
             const isDone = st === 'completed';
+            const isRescheduled = st === 'rescheduled';
+            const isResolved = isDone || isRescheduled;
             const key = getRowKey(item, idx);
+            const isRowBusy = busyAction.startsWith(`${key}:`);
 
             return (
               <div
                 key={key}
-                className="flex items-center justify-between bg-secondary/40 border border-border/60 rounded-xl p-3 hover:bg-secondary/70 transition-colors"
+                className="flex items-center justify-between gap-3 bg-secondary/40 border border-border/60 rounded-xl p-3 hover:bg-secondary/70 transition-colors"
               >
-                <div className="space-y-0.5">
-                  <div className="text-sm font-medium text-foreground flex items-center gap-2">
-                    {item.class_name || item.student_name || 'Class Assignment'}
+                <div className="space-y-0.5 min-w-0">
+                  <div className="text-sm font-medium text-foreground flex items-center gap-2 flex-wrap">
+                    <span className="truncate">
+                      {item.class_name || item.student_name || 'Class Assignment'}
+                    </span>
                     {isDone && (
-                      <span className="text-[10px] px-2 py-0.2 rounded-full bg-emerald-500/15 text-emerald-400 font-normal">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 font-medium">
                         Done
+                      </span>
+                    )}
+                    {isRescheduled && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 font-medium">
+                        Rescheduled
                       </span>
                     )}
                   </div>
@@ -164,21 +203,38 @@ export default function MyWeeklyFeedbackPanel() {
                   )}
                 </div>
 
-                {!isDone && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleMarkComplete(item, idx)}
-                    disabled={busyKey === key}
-                    className="h-8 px-2.5 text-xs text-chart-3 hover:bg-chart-3/15 gap-1.5 shrink-0"
-                  >
-                    {busyKey === key ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Check className="w-3.5 h-3.5" />
-                    )}
-                    Mark Done
-                  </Button>
+                {!isResolved && (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleUpdateStatus(item, idx, 'completed')}
+                      disabled={isRowBusy}
+                      className="h-8 px-2.5 text-xs text-chart-3 hover:bg-chart-3/15 gap-1.5"
+                    >
+                      {busyAction === `${key}:completed` ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5" />
+                      )}
+                      Mark Done
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleUpdateStatus(item, idx, 'rescheduled')}
+                      disabled={isRowBusy}
+                      className="h-8 px-2.5 text-xs text-amber-600 hover:bg-amber-500/15 hover:text-amber-700 gap-1.5"
+                    >
+                      {busyAction === `${key}:rescheduled` ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <CalendarClock className="w-3.5 h-3.5" />
+                      )}
+                      Mark Reschedule
+                    </Button>
+                  </div>
                 )}
               </div>
             );
