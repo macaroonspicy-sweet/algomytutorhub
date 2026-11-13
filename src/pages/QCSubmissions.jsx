@@ -26,18 +26,18 @@ import { toast } from 'sonner';
 const PER_PAGE = 10;
 
 const MONTHS = [
-  { value: 1, label: 'Januari' },
-  { value: 2, label: 'Februari' },
-  { value: 3, label: 'Maret' },
+  { value: 1, label: 'January' },
+  { value: 2, label: 'February' },
+  { value: 3, label: 'March' },
   { value: 4, label: 'April' },
-  { value: 5, label: 'Mei' },
-  { value: 6, label: 'Juni' },
-  { value: 7, label: 'Juli' },
-  { value: 8, label: 'Agustus' },
+  { value: 5, label: 'May' },
+  { value: 6, label: 'June' },
+  { value: 7, label: 'July' },
+  { value: 8, label: 'August' },
   { value: 9, label: 'September' },
-  { value: 10, label: 'Oktober' },
+  { value: 10, label: 'October' },
   { value: 11, label: 'November' },
-  { value: 12, label: 'Desember' },
+  { value: 12, label: 'December' },
 ];
 
 const getMonthName = (monthNum) => {
@@ -74,7 +74,7 @@ export default function QCSubmissions() {
     search: '',
   });
 
-  // State untuk Modal Submit Baru (khusus Tutor / manual)
+  // State for New Submission Modal (Tutor / manual)
   const [createOpen, setCreateOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [createForm, setCreateForm] = useState({
@@ -85,7 +85,7 @@ export default function QCSubmissions() {
     notes: '',
   });
 
-  // State untuk Modal Edit
+  // State for Edit Modal
   const [editingItem, setEditingItem] = useState(null);
   const [editForm, setEditForm] = useState({
     tutor_name: '',
@@ -108,7 +108,7 @@ export default function QCSubmissions() {
       if (error) throw error;
       setSubmissions(data || []);
     } catch (err) {
-      toast.error('Gagal memuat QC submissions', { description: err.message });
+      toast.error('Failed to load QC submissions', { description: err.message });
     } finally {
       setLoading(false);
     }
@@ -118,7 +118,7 @@ export default function QCSubmissions() {
     loadSubmissions();
   }, []);
 
-  // Batasi data: jika Tutor, hanya tampilkan miliknya sendiri
+  // Scope data: if Tutor, only show their own submissions
   const roleScopedSubmissions = useMemo(() => {
     if (!isTutorOnly) return submissions;
     const myId = currentUser?.id;
@@ -137,7 +137,7 @@ export default function QCSubmissions() {
 
   const handleCreateSubmit = async () => {
     if (!createForm.recording_url.trim()) {
-      toast.error('Link rekaman kelas wajib diisi');
+      toast.error('Class recording link is required');
       return;
     }
 
@@ -167,7 +167,7 @@ export default function QCSubmissions() {
       const { error } = await supabase.from('QCSubmission').insert([payload]);
       if (error) throw error;
 
-      toast.success('Link rekaman QC berhasil dikirim!');
+      toast.success('QC recording link submitted successfully!');
       setCreateOpen(false);
       setCreateForm({
         period_month: now.getMonth() + 1,
@@ -178,7 +178,7 @@ export default function QCSubmissions() {
       });
       loadSubmissions();
     } catch (err) {
-      toast.error('Gagal mengirim submission', { description: err.message });
+      toast.error('Failed to submit recording', { description: err.message });
     } finally {
       setSubmitting(false);
     }
@@ -200,23 +200,23 @@ export default function QCSubmissions() {
         .eq('id', item.id);
 
       if (error) throw error;
-      toast.success(`Status berhasil diubah menjadi: ${newStatus}`);
+      toast.success(`Status updated to: ${newStatus}`);
       loadSubmissions();
     } catch (err) {
-      toast.error('Gagal mengubah status', { description: err.message });
+      toast.error('Failed to update status', { description: err.message });
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Apakah kamu yakin ingin menghapus submission ini?')) return;
+    if (!confirm('Are you sure you want to delete this submission?')) return;
     try {
       const { error } = await supabase.from('QCSubmission').delete().eq('id', id);
 
       if (error) throw error;
-      toast.success('Submission berhasil dihapus');
+      toast.success('Submission deleted successfully');
       loadSubmissions();
     } catch (err) {
-      toast.error('Gagal menghapus', { description: err.message });
+      toast.error('Failed to delete submission', { description: err.message });
     }
   };
 
@@ -243,11 +243,11 @@ export default function QCSubmissions() {
         .eq('id', editingItem.id);
 
       if (error) throw error;
-      toast.success('Submission berhasil diperbarui');
+      toast.success('Submission updated successfully');
       setEditingItem(null);
       loadSubmissions();
     } catch (err) {
-      toast.error('Gagal memperbarui', { description: err.message });
+      toast.error('Failed to update submission', { description: err.message });
     }
   };
 
@@ -277,7 +277,7 @@ export default function QCSubmissions() {
 
   const handleExportExcel = async () => {
     if (filtered.length === 0) {
-      toast.error('Tidak ada data untuk di-export');
+      toast.error('No data available to export');
       return;
     }
 
@@ -287,10 +287,10 @@ export default function QCSubmissions() {
       const exportRows = filtered.map((s, idx) => ({
         No: idx + 1,
         Tutor: s.tutor_name || '-',
-        Bulan: s.period_month ? getMonthName(s.period_month) : '-',
-        Tahun: s.period_year || '-',
-        Periode: s.period ? `Periode ${s.period}` : '-',
-        'Catatan / Keterangan': s.notes || '-',
+        Month: s.period_month ? getMonthName(s.period_month) : '-',
+        Year: s.period_year || '-',
+        Period: s.period ? `Period ${s.period}` : '-',
+        'Notes / Class Info': s.notes || '-',
         Status:
           s.status === 'evaluated'
             ? 'Evaluated'
@@ -298,7 +298,7 @@ export default function QCSubmissions() {
             ? 'Submitted'
             : 'Pending',
         'Recording Link': s.recording_url || '-',
-        'Tanggal Submit': s.submission_date || '-',
+        'Submission Date': s.submission_date || '-',
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -319,9 +319,9 @@ export default function QCSubmissions() {
 
       const dateStr = new Date().toISOString().slice(0, 10);
       XLSX.writeFile(workbook, `QC_Submissions_${dateStr}.xlsx`);
-      toast.success('File Excel berhasil diunduh');
+      toast.success('Excel file downloaded successfully');
     } catch (err) {
-      toast.error('Gagal export Excel', { description: err.message });
+      toast.error('Failed to export Excel', { description: err.message });
     }
   };
 
@@ -344,8 +344,8 @@ export default function QCSubmissions() {
           </h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             {isTutorOnly
-              ? 'Riwayat link rekaman kelas yang kamu kirimkan untuk evaluasi QC.'
-              : 'Daftar link rekaman kelas yang dikirimkan oleh tutor untuk dinilai.'}
+              ? 'History of class recording links you have submitted for QC evaluation.'
+              : 'List of class recording links submitted by tutors for evaluation.'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 self-start lg:self-auto">
@@ -373,9 +373,9 @@ export default function QCSubmissions() {
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-3">
         <StatCard label="Total Submissions" value={summary.total} icon={CheckCircle2} tone="bg-chart-3/70" />
-        <StatCard label="Sudah Dinilai (Evaluated)" value={summary.evaluated} icon={CheckSquare} tone="bg-emerald-600/70" />
-        <StatCard label="Submitted (Terkirim)" value={summary.submitted} icon={Clock} tone="bg-primary/70" />
-        <StatCard label="Pending (Belum Kirim)" value={summary.pending} icon={Clock} tone="bg-amber-600/70" />
+        <StatCard label="Evaluated" value={summary.evaluated} icon={CheckSquare} tone="bg-emerald-600/70" />
+        <StatCard label="Submitted" value={summary.submitted} icon={Clock} tone="bg-primary/70" />
+        <StatCard label="Pending (Not Sent)" value={summary.pending} icon={Clock} tone="bg-amber-600/70" />
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
@@ -385,14 +385,14 @@ export default function QCSubmissions() {
             <Input
               value={filters.search}
               onChange={(e) => set('search', e.target.value)}
-              placeholder={isTutorOnly ? 'Cari catatan atau keterangan...' : 'Cari nama tutor atau catatan...'}
+              placeholder={isTutorOnly ? 'Search notes or details...' : 'Search tutor name or notes...'}
               className="pl-9"
             />
           </div>
           <Select value={filters.month} onValueChange={(v) => set('month', v)}>
-            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Bulan" /></SelectTrigger>
+            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Month" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Semua Bulan</SelectItem>
+              <SelectItem value="all">All Months</SelectItem>
               {MONTHS.map((m) => (
                 <SelectItem key={m.value} value={String(m.value)}>
                   {m.label}
@@ -401,17 +401,17 @@ export default function QCSubmissions() {
             </SelectContent>
           </Select>
           <Select value={filters.period} onValueChange={(v) => set('period', v)}>
-            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Periode" /></SelectTrigger>
+            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Period" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Semua Periode</SelectItem>
-              <SelectItem value="1">Periode 1</SelectItem>
-              <SelectItem value="2">Periode 2</SelectItem>
+              <SelectItem value="all">All Periods</SelectItem>
+              <SelectItem value="1">Period 1</SelectItem>
+              <SelectItem value="2">Period 2</SelectItem>
             </SelectContent>
           </Select>
           <Select value={filters.status} onValueChange={(v) => set('status', v)}>
             <SelectTrigger className="lg:w-44"><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Semua Status</SelectItem>
+              <SelectItem value="all">All Statuses</SelectItem>
               <SelectItem value="submitted">Submitted</SelectItem>
               <SelectItem value="evaluated">Evaluated</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
@@ -419,32 +419,32 @@ export default function QCSubmissions() {
           </Select>
         </div>
         <div className="text-xs text-muted-foreground">
-          Menampilkan {filtered.length} data
+          Showing {filtered.length} records
         </div>
       </div>
 
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-foreground">Daftar Link Submissions</h2>
+          <h2 className="text-sm font-semibold text-foreground">Submission Links List</h2>
         </div>
         {loading ? (
           <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
         ) : paginated.length === 0 ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">Belum ada submission ditemukan.</div>
+          <div className="py-12 text-center text-sm text-muted-foreground">No submissions found yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-secondary/50">
                 <tr className="text-left text-xs text-muted-foreground">
                   {!isTutorOnly && (
-                    <th className="px-4 py-3 font-medium w-12 text-center">Status Nilai</th>
+                    <th className="px-4 py-3 font-medium w-12 text-center">Evaluation Status</th>
                   )}
                   <th className="px-4 py-3 font-medium">Tutor</th>
-                  <th className="px-4 py-3 font-medium">Bulan & Periode</th>
-                  <th className="px-4 py-3 font-medium">Catatan / Keterangan</th>
+                  <th className="px-4 py-3 font-medium">Month & Period</th>
+                  <th className="px-4 py-3 font-medium">Notes / Details</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium text-right">Recording Link</th>
-                  <th className="px-4 py-3 font-medium text-center">Aksi</th>
+                  <th className="px-4 py-3 font-medium text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -456,7 +456,7 @@ export default function QCSubmissions() {
                         <td className="px-4 py-3 text-center">
                           <button
                             onClick={() => toggleEvaluatedStatus(s)}
-                            title="Klik untuk centang sudah dinilai (Evaluated)"
+                            title="Click to toggle Evaluated status"
                             className="p-1 rounded hover:bg-secondary transition-colors inline-flex items-center justify-center text-primary"
                           >
                             {s.status === 'evaluated' ? (
@@ -473,7 +473,7 @@ export default function QCSubmissions() {
                           {s.period_month ? `${getMonthName(s.period_month)} ${s.period_year || ''}` : '—'}
                         </div>
                         <div className="text-[11px] text-primary">
-                          {s.period ? `Periode ${s.period}` : '—'}
+                          {s.period ? `Period ${s.period}` : '—'}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground max-w-[250px] truncate">
@@ -505,7 +505,7 @@ export default function QCSubmissions() {
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 text-primary hover:underline text-xs font-medium"
                           >
-                            <ExternalLink className="w-3.5 h-3.5" /> Buka Link
+                            <ExternalLink className="w-3.5 h-3.5" /> Open Link
                           </a>
                         ) : (
                           <span className="text-muted-foreground text-xs">—</span>
@@ -559,12 +559,12 @@ export default function QCSubmissions() {
 
       {totalPages > 1 && <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />}
 
-      {/* Modal Submit Baru (Tutor) */}
+      {/* New Submission Modal (Tutor) */}
       {createOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-xl">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-foreground">Submit Recording QC</h3>
+              <h3 className="text-lg font-bold text-foreground">Submit QC Recording</h3>
               <Button size="icon" variant="ghost" onClick={() => setCreateOpen(false)}>
                 <X className="w-4 h-4" />
               </Button>
@@ -573,7 +573,7 @@ export default function QCSubmissions() {
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Bulan</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Month</label>
                   <Select
                     value={String(createForm.period_month)}
                     onValueChange={(v) => setCreateForm({ ...createForm, period_month: Number(v) })}
@@ -590,7 +590,7 @@ export default function QCSubmissions() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Tahun</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Year</label>
                   <Input
                     type="number"
                     value={createForm.period_year}
@@ -599,22 +599,22 @@ export default function QCSubmissions() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Periode</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Period</label>
                   <Select
                     value={String(createForm.period)}
                     onValueChange={(v) => setCreateForm({ ...createForm, period: Number(v) })}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1">Periode 1</SelectItem>
-                      <SelectItem value="2">Periode 2</SelectItem>
+                      <SelectItem value="1">Period 1</SelectItem>
+                      <SelectItem value="2">Period 2</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </div>
 
               <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Recording URL / Link Drive</label>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Recording URL / Drive Link</label>
                 <Input
                   placeholder="https://drive.google.com/..."
                   value={createForm.recording_url}
@@ -623,7 +623,7 @@ export default function QCSubmissions() {
               </div>
 
               <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Catatan / Nama Kelas</label>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Notes / Class Name</label>
                 <Input
                   placeholder="-"
                   value={createForm.notes}
@@ -633,17 +633,17 @@ export default function QCSubmissions() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
+              <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
               <Button onClick={handleCreateSubmit} disabled={submitting} className="gap-1.5">
                 {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                Kirim Submission
+                Submit Recording
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal Edit */}
+      {/* Edit Modal */}
       {editingItem && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-xl">
@@ -657,7 +657,7 @@ export default function QCSubmissions() {
             <div className="space-y-3">
               {!isTutorOnly && (
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Nama Tutor</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Tutor Name</label>
                   <Input
                     value={editForm.tutor_name}
                     onChange={(e) => setEditForm({ ...editForm, tutor_name: e.target.value })}
@@ -667,7 +667,7 @@ export default function QCSubmissions() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Bulan</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Month</label>
                   <Select
                     value={String(editForm.period_month)}
                     onValueChange={(v) => setEditForm({ ...editForm, period_month: Number(v) })}
@@ -684,7 +684,7 @@ export default function QCSubmissions() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Tahun</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Year</label>
                   <Input
                     type="number"
                     value={editForm.period_year}
@@ -693,15 +693,15 @@ export default function QCSubmissions() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Periode</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Period</label>
                   <Select
                     value={String(editForm.period)}
                     onValueChange={(v) => setEditForm({ ...editForm, period: Number(v) })}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1">Periode 1</SelectItem>
-                      <SelectItem value="2">Periode 2</SelectItem>
+                      <SelectItem value="1">Period 1</SelectItem>
+                      <SelectItem value="2">Period 2</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -715,7 +715,7 @@ export default function QCSubmissions() {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Catatan</label>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Notes</label>
                 <Input
                   value={editForm.notes}
                   onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
@@ -737,9 +737,9 @@ export default function QCSubmissions() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setEditingItem(null)}>Batal</Button>
+              <Button variant="outline" onClick={() => setEditingItem(null)}>Cancel</Button>
               <Button onClick={handleSaveEdit} className="gap-1.5">
-                <Save className="w-4 h-4" /> Simpan
+                <Save className="w-4 h-4" /> Save Changes
               </Button>
             </div>
           </div>

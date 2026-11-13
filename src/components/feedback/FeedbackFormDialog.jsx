@@ -84,7 +84,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
         }
         setForm(norm);
       } else {
-        // Otomatis isi data tutor dari akun yang sedang login saat form baru dibuka
+        // Auto-fill tutor data from the currently logged-in account when opening a new form
         setForm({
           ...EMPTY_FORM,
           tutor_id: currentUser?.id || '',
@@ -115,7 +115,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
     if (t) setForm(f => ({ ...f, tutor_id: id, tutor_name: t.full_name, tutor_photo: t.photo_url || '', tutor_telegram: t.telegram_account || '' }));
   };
 
-  // Filtered modules berdasarkan course yang dipilih
+  // Filtered modules based on selected course
   const courseModules = modules.filter(m => m.course_name === form.course_category_id);
   const availableMonths = [...new Set(courseModules.map(m => m.month).filter(Boolean))].sort((a, b) => a - b);
   const moduleTopics = [...new Set(courseModules.map(m => m.module_topic).filter(Boolean))];
@@ -209,17 +209,17 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
       onSaved();
     } catch (err) {
       console.error('Error saving feedback:', err);
-      toast.error('Gagal menyimpan feedback: ' + (err.message || 'Terjadi kesalahan'));
+      toast.error('Failed to save feedback: ' + (err.message || 'An unexpected error occurred'));
       setSaving(false);
     }
   };
 
-  // Handler khusus klik tombol submit untuk perangkat HP/Touch Screen
+  // Custom submit button click handler for mobile / touch screen devices
   const handleSubmitClick = (e) => {
     e.preventDefault();
     if (!requiredComplete) {
-      toast.error('Form Belum Lengkap', {
-        description: 'Mohon pastikan Nama Siswa, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task Completion sudah terisi.',
+      toast.error('Incomplete Form', {
+        description: 'Please ensure Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task Completion are filled in.',
       });
       return;
     }
@@ -286,7 +286,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
             />
           </Field>
 
-          {/* Tutor Name (Otomatis & Dikunci untuk Role Tutor/Team Leader) */}
+          {/* Tutor Name (Auto-filled & Locked for Tutor/Team Leader Roles) */}
           <Field label="Tutor Name *">
             {isTutorRole ? (
               <Input
@@ -429,7 +429,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, onSave
           <div className="flex flex-col items-end gap-2 pt-2 pb-4">
             {!requiredComplete && (
               <p className="text-xs text-amber-400 text-right font-medium">
-                ⚠️ Mohon lengkapi bidang berlabel (*) seperti Nama Siswa, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task.
+                ⚠️ Please complete all required fields (*) such as Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task.
               </p>
             )}
             <div className="flex justify-end gap-3 w-full sm:w-auto">
