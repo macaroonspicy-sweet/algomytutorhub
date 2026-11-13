@@ -31,14 +31,17 @@ export function fmtDate(value) {
 }
 
 export function assignmentStatus(assignment) {
-  if (assignment.status === 'completed') return 'completed';
-  if (assignment.week_end_date && String(assignment.week_end_date).slice(0, 10) < todayKey()) return 'overdue';
+  const st = String(assignment?.status || '').toLowerCase().trim();
+  if (st === 'rescheduled' || st === 'postponed') return 'rescheduled';
+  if (st === 'completed' || st === 'done' || assignment?.is_done) return 'completed';
+  if (assignment?.week_end_date && String(assignment.week_end_date).slice(0, 10) < todayKey()) return 'overdue';
   return 'pending';
 }
 
 export const FEEDBACK_STATUS_META = {
   pending: { label: 'Pending', className: 'bg-chart-4/15 text-chart-4 border-chart-4/30' },
   completed: { label: 'Completed', className: 'bg-chart-3/15 text-chart-3 border-chart-3/30' },
+  rescheduled: { label: 'Rescheduled', className: 'bg-amber-500/15 text-amber-600 border-amber-500/30' },
   overdue: { label: 'Overdue', className: 'bg-destructive/15 text-destructive border-destructive/30' },
 };
 

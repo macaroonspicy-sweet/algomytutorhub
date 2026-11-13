@@ -46,7 +46,6 @@ export default function WeeklyFeedback() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Weekly Assignments
       const { data: assignmentsData, error: assignErr } = await supabase
         .from('WeeklyFeedbackAssignment')
         .select('*')
@@ -56,12 +55,10 @@ export default function WeeklyFeedback() {
         console.warn('WeeklyFeedbackAssignment fetch warning:', assignErr.message);
       }
 
-      // 2. Fetch Users (Tutors)
       const { data: userData } = await supabase
         .from('CustomUser')
         .select('*');
 
-      // 3. Fetch Feedback Records untuk kalkulasi Otomatis Mark Completed (berdasarkan jumlah murid)
       const { data: recordsData } = await supabase
         .from('FeedbackRecord')
         .select('class_code, class_name, week_start_date');
@@ -70,36 +67,38 @@ export default function WeeklyFeedback() {
       const fetchedUsers = userData || [];
       const fetchedRecords = recordsData || [];
 
-      // Otomatisasi Check Completed: Bandingkan jumlah feedback terisi dengan target student_count
       const updatedAssignments = fetchedAssignments.map((assignment) => {
-        if (assignment.status === 'completed') return assignment;
+        if (assignment.status === 'completed' || assignment.status === 'rescheduled') return assignment;
 
-        // Hitung berapa murid yang sudah dapat feedback di kelas dan minggu ini
-        const filledCount = fetchedRecords.filter(r => 
-          (r.class_name === assignment.class_name || r.class_code === assignment.class_code)
+        const filledCount = fetchedRecords.filter(
+          (r) => r.class_name === assignment.class_name || r.class_code === assignment.class_code
         ).length;
 
-        // Target murid di kelas (default 1 untuk private, atau sesuai isi student_count)
         const targetCount = assignment.student_count || 1;
 
         if (filledCount >= targetCount && filledCount > 0) {
-          // Update status di Supabase secara background
+          const nowIso = new Date().toISOString();
           supabase
             .from('WeeklyFeedbackAssignment')
-            .update({ status: 'completed', completed_at: new Date().toISOString() })
+            .update({
+              status: 'completed',
+              is_done: true,
+              completed_at: nowIso,
+              completed_date: nowIso,
+              updated_date: nowIso,
+            })
             .eq('id', assignment.id)
             .then();
 
-          return { ...assignment, status: 'completed' };
+          return { ...assignment, status: 'completed', is_done: true };
         }
         return assignment;
       });
 
       setItems(updatedAssignments);
 
-      // Ambil daftar unik Kelas dan Course untuk Dropdown
       const uniqueClassesList = [...new Set(updatedAssignments.map(classKeyOf).filter(Boolean))];
-      const uniqueCoursesList = [...new Set(updatedAssignments.map(i => i.course_name).filter(Boolean))];
+      const uniqueCoursesList = [...new Set(updatedAssignments.map((i) => i.course_name).filter(Boolean))];
 
       setClasses(uniqueClassesList);
       setCourses(uniqueCoursesList);
@@ -112,8 +111,8 @@ export default function WeeklyFeedback() {
     }
   };
 
-  useEffect(() => { 
-    if (currentUser?.id) loadAll(); 
+  useEffect(() => {
+    if (currentUser?.id) loadAll();
   }, [currentUser?.id]);
 
   const weeks = [...new Set(items.map((i) => i.week_start_date?.slice(0, 10)).filter(Boolean))].sort().reverse();
@@ -132,22 +131,31 @@ export default function WeeklyFeedback() {
     return true;
   });
 
-  useEffect(() => { setPage(1); }, [search, week, classFilter, tutor, status]);
+  useEffect(() => {
+    setPage(1);
+  }, [search, week, classFilter, tutor, status]);
 
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE) || 1;
   const paginated = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
 
-  const openCreate = () => { setEditing(null); setFormOpen(true); };
+  const openCreate = () => {
+    setEditing(null);
+    setFormOpen(true);
+  };
 
   const markComplete = async (item) => {
     setBusyId(item.id);
     try {
+      const nowIso = new Date().toISOString();
       const { error } = await supabase
         .from('WeeklyFeedbackAssignment')
-        .update({ 
+        .update({
           status: 'completed',
+          is_done: true,
           completed_by_name: currentUser?.full_name || currentUser?.email || 'Tutor',
-          completed_at: new Date().toISOString()
+          completed_at: nowIso,
+          completed_date: nowIso,
+          updated_date: nowIso,
         })
         .eq('id', item.id);
 
@@ -189,9 +197,9 @@ export default function WeeklyFeedback() {
           'Student Count': 1,
           'Week Start': '2026-11-09',
           'Week End': '2026-11-15',
-          'Status': 'Pending',
-          'Notes': 'Sample note'
-        }
+          Status: 'Pending',
+          Notes: 'Sample note',
+        },
       ];
 
       const worksheet = XLSX.utils.json_to_sheet(sampleData);
@@ -204,7 +212,7 @@ export default function WeeklyFeedback() {
         { wch: 14 },
         { wch: 14 },
         { wch: 12 },
-        { wch: 28 }
+        { wch: 28 },
       ];
 
       const workbook = XLSX.utils.book_new();
@@ -294,6 +302,7 @@ export default function WeeklyFeedback() {
               <SelectItem value="all">All status</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="rescheduled">Rescheduled</SelectItem>
               <SelectItem value="overdue">Overdue</SelectItem>
             </SelectContent>
           </Select>
@@ -346,7 +355,7 @@ export default function WeeklyFeedback() {
                       <td className="px-4 py-3 text-foreground">{item.tutor_name}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex px-2 py-0.5 rounded-full border text-[11px] font-medium ${meta.className}`}>{meta.label}</span>
-                        {st === 'completed' && item.completed_by_name && (
+                        {(st === 'completed' || st === 'rescheduled') && item.completed_by_name && (
                           <div className="text-[10px] text-muted-foreground mt-1">by {item.completed_by_name}</div>
                         )}
                       </td>
@@ -354,17 +363,35 @@ export default function WeeklyFeedback() {
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1">
                           {st !== 'completed' && (
-                            <Button size="icon" variant="ghost" onClick={() => markComplete(item)} disabled={busyId === item.id}
-                              className="w-8 h-8 text-chart-3 hover:bg-chart-3/10" title="Mark completed">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => markComplete(item)}
+                              disabled={busyId === item.id}
+                              className="w-8 h-8 text-chart-3 hover:bg-chart-3/10"
+                              title="Mark completed"
+                            >
                               {busyId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                             </Button>
                           )}
                           {canManage && (
                             <>
-                              <Button size="icon" variant="ghost" onClick={() => { setEditing(item); setFormOpen(true); }} className="w-8 h-8 text-muted-foreground hover:text-foreground" title="Edit">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => { setEditing(item); setFormOpen(true); }}
+                                className="w-8 h-8 text-muted-foreground hover:text-foreground"
+                                title="Edit"
+                              >
                                 <Pencil className="w-4 h-4" />
                               </Button>
-                              <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(item.id)} className="w-8 h-8 text-destructive hover:bg-destructive/10" title="Delete">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => setDeleteTarget(item.id)}
+                                className="w-8 h-8 text-destructive hover:bg-destructive/10"
+                                title="Delete"
+                              >
                                 <Trash2 className="w-4 h-4" />
                               </Button>
                             </>
