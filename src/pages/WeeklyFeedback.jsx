@@ -170,16 +170,26 @@ export default function WeeklyFeedback() {
   };
 
   const confirmDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('WeeklyFeedbackAssignment')
         .delete()
-        .eq('id', deleteTarget);
+        .eq('id', deleteTarget)
+        .select();
 
       if (error) throw error;
+
+      if (!data || data.length === 0) {
+        toast.error('Blocked by Supabase RLS policy', {
+          description: 'Please enable DELETE policy on WeeklyFeedbackAssignment in Supabase SQL Editor.',
+        });
+        return;
+      }
+
+      setItems((prev) => prev.filter((item) => item.id !== deleteTarget));
       toast.success('Assignment deleted');
       setDeleteTarget(null);
-      loadAll();
     } catch (err) {
       toast.error('Could not delete', { description: err.message });
     }
@@ -433,6 +443,7 @@ export default function WeeklyFeedback() {
         open={!!deleteTarget}
         onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}
         onConfirm={confirmDelete}
+        onDelete={confirmDelete}
         title="Delete assignment"
         description="This removes the assignment from the weekly feedback list. Historical feedback records are not affected."
       />
