@@ -38,6 +38,7 @@ export default function StudentFeedback() {
   const canDelete = hasPermission('student_feedback_delete');
   const showCreatorInfo = ['Head of Tutor', 'Head of Retention', 'QC Team'].includes(currentUser?.role);
   const isTeamLeader = currentUser?.role === 'Team Leader';
+  const isTutorOnly = currentUser?.role === 'Tutor';
 
   useEffect(() => { 
     if (currentUser?.id) { loadData(); } 
@@ -190,14 +191,16 @@ export default function StudentFeedback() {
           <h1 className="text-3xl font-bold text-foreground">Student Feedback</h1>
           <p className="text-muted-foreground text-sm mt-0.5">Manage student feedback records</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setExportOpen(true)} className="border-border gap-2">
-            <FileSpreadsheet className="w-4 h-4" /> Export Excel
-          </Button>
-          <Button onClick={openCreate} className="bg-primary hover:bg-primary/90 gap-2">
-            <Plus className="w-4 h-4" /> Add Feedback
-          </Button>
-        </div>
+        {!isTutorOnly && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setExportOpen(true)} className="border-border gap-2">
+              <FileSpreadsheet className="w-4 h-4" /> Export Excel
+            </Button>
+            <Button onClick={openCreate} className="bg-primary hover:bg-primary/90 gap-2">
+              <Plus className="w-4 h-4" /> Add Feedback
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
@@ -331,7 +334,9 @@ export default function StudentFeedback() {
             ))}
             {paginatedRecords.length === 0 && (
               <div className="col-span-3 bg-card border border-border rounded-2xl p-12 text-center text-muted-foreground">
-                No feedback records yet. Click "Add Feedback" to create one.
+                {isTutorOnly
+                  ? 'No feedback records yet. Please submit your class feedback via the Dashboard.'
+                  : 'No feedback records yet. Click "Add Feedback" to create one.'}
               </div>
             )}
           </div>
