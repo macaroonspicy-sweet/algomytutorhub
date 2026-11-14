@@ -104,8 +104,8 @@ export default function WeeklyFeedback() {
       setCourses(uniqueCoursesList);
       setTutors(fetchedUsers.filter((u) => ['Tutor', 'Team Leader'].includes(u.role) && u.is_active !== false));
     } catch (err) {
-      console.error('Error loading weekly feedback:', err);
-      toast.error('Could not load weekly feedback', { description: err.message });
+      console.error('Error loading monthly feedback:', err);
+      toast.error('Could not load monthly student feedback', { description: err.message });
     } finally {
       setLoading(false);
     }
@@ -181,8 +181,8 @@ export default function WeeklyFeedback() {
       if (error) throw error;
 
       if (!data || data.length === 0) {
-        toast.error('Blocked by Supabase RLS policy', {
-          description: 'Please enable DELETE policy on WeeklyFeedbackAssignment in Supabase SQL Editor.',
+        toast.error('Delete blocked by database permission (RLS)', {
+          description: 'Please run the CREATE POLICY DELETE query in Supabase SQL Editor.',
         });
         return;
       }
@@ -191,7 +191,7 @@ export default function WeeklyFeedback() {
       toast.success('Assignment deleted');
       setDeleteTarget(null);
     } catch (err) {
-      toast.error('Could not delete', { description: err.message });
+      toast.error('Could not delete assignment', { description: err.message });
     }
   };
 
@@ -208,7 +208,7 @@ export default function WeeklyFeedback() {
           'Week Start': '2026-11-09',
           'Week End': '2026-11-15',
           Status: 'Pending',
-          Notes: 'Sample note',
+          Notes: 'Lesson 4 Monthly Report',
         },
       ];
 
@@ -226,9 +226,9 @@ export default function WeeklyFeedback() {
       ];
 
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Weekly Feedback Template');
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Monthly Feedback Template');
 
-      XLSX.writeFile(workbook, 'Weekly_Student_Feedback_Template.xlsx');
+      XLSX.writeFile(workbook, 'Monthly_Student_Feedback_Template.xlsx');
       toast.success('Template downloaded successfully');
     } catch (err) {
       console.error('Download template error:', err);
@@ -252,9 +252,9 @@ export default function WeeklyFeedback() {
     <div className="space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Weekly Student Feedback</h1>
+          <h1 className="text-3xl font-bold text-foreground">Monthly Student Feedback</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            Current week: {fmtDate(currentWeek.start)} – {fmtDate(currentWeek.end)}
+            Monthly student progress reports (every 4th lesson) · Current period: {fmtDate(currentWeek.start)} – {fmtDate(currentWeek.end)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -286,7 +286,7 @@ export default function WeeklyFeedback() {
             <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search class, course or tutor..." className="pl-9" />
           </div>
           <Select value={week} onValueChange={setWeek}>
-            <SelectTrigger className="lg:w-48"><SelectValue placeholder="Week" /></SelectTrigger>
+            <SelectTrigger className="lg:w-48"><SelectValue placeholder="Schedule Week" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All weeks</SelectItem>
               {weeks.map((w) => <SelectItem key={w} value={w}>Week of {fmtDate(w)}</SelectItem>)}
@@ -319,7 +319,7 @@ export default function WeeklyFeedback() {
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Filter className="w-3 h-3" />
-          <span>{filtered.length} of {items.length} assignments</span>
+          <span>{filtered.length} of {items.length} monthly report assignments</span>
           {anyFilter && (
             <Button size="sm" variant="ghost" onClick={() => { setSearch(''); setWeek('all'); setClassFilter('all'); setTutor('all'); setStatus('all'); }} className="h-6 px-2">Clear all</Button>
           )}
@@ -331,7 +331,7 @@ export default function WeeklyFeedback() {
           <div className="flex justify-center py-14"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
         ) : paginated.length === 0 ? (
           <div className="py-14 text-center">
-            <p className="text-muted-foreground text-sm">No assignments match this view.</p>
+            <p className="text-muted-foreground text-sm">No monthly report assignments match this view.</p>
             {canManage && <p className="text-xs text-muted-foreground mt-1">Add an assignment or import an Excel file to get started.</p>}
           </div>
         ) : (
@@ -339,7 +339,7 @@ export default function WeeklyFeedback() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/50">
                 <tr className="text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-3 font-medium">Week</th>
+                  <th className="px-4 py-3 font-medium">Schedule Period</th>
                   <th className="px-4 py-3 font-medium">Class</th>
                   <th className="px-4 py-3 font-medium">Tutor</th>
                   <th className="px-4 py-3 font-medium">Status</th>
@@ -434,7 +434,7 @@ export default function WeeklyFeedback() {
         onOpenChange={setExportOpen}
         defaultModule="weekly_feedback"
         modules={[
-          { value: 'weekly_feedback', label: 'Weekly Class Feedback', hint: 'Class assignments, statuses and completion' },
+          { value: 'weekly_feedback', label: 'Monthly Class Feedback', hint: 'Monthly progress report assignments, statuses and completion' },
           { value: 'student_feedback', label: 'Student Feedback Records', hint: 'Recorded feedback with points' },
         ]}
         filters={exportFilters}
@@ -445,7 +445,7 @@ export default function WeeklyFeedback() {
         onConfirm={confirmDelete}
         onDelete={confirmDelete}
         title="Delete assignment"
-        description="This removes the assignment from the weekly feedback list. Historical feedback records are not affected."
+        description="This removes the assignment from the monthly feedback list. Historical feedback records are not affected."
       />
     </div>
   );
