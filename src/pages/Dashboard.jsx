@@ -1,12 +1,35 @@
 const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
 
-import React, { useEffect, useState } from 'react';
-
+import React, { useEffect, useState, useMemo } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
-import { Users, Star, MessageSquare, CheckSquare, TrendingUp, BookOpen, Award, FileText, Calendar } from 'lucide-react';
+import { Users, Star, MessageSquare, CheckSquare, TrendingUp, BookOpen, Award, FileText, Calendar, CalendarCheck, Loader2 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import TutorTasksPanel from '@/components/tasks/TutorTasksPanel';
 import MyWeeklyFeedbackPanel from '@/components/weekly-feedback/MyWeeklyFeedbackPanel';
 import QCSubmissionPanel from '@/components/qc/QCSubmissionPanel';
+
+const WEEKS_LIST = [
+  'Week 1 (1–7)',
+  'Week 2 (8–14)',
+  'Week 3 (15–21)',
+  'Week 4 (22–End)',
+];
+
+const MONTHS_LIST = [
+  { value: '1', label: 'January' },
+  { value: '2', label: 'February' },
+  { value: '3', label: 'March' },
+  { value: '4', label: 'April' },
+  { value: '5', label: 'May' },
+  { value: '6', label: 'June' },
+  { value: '7', label: 'July' },
+  { value: '8', label: 'August' },
+  { value: '9', label: 'September' },
+  { value: '10', label: 'October' },
+  { value: '11', label: 'November' },
+  { value: '12', label: 'December' },
+];
 
 function StatCard({ label, value, icon: Icon, color, glow }) {
   return (
@@ -26,6 +49,14 @@ export default function Dashboard() {
   const { currentUser, hasPermission } = useAppAuth();
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
+
+  // My Weekly Teaching & Attendance states (Tutor / Team Leader)
+  const [myScheduleRecords, setMyScheduleRecords] = useState([]);
+  const [loadingSchedules, setLoadingSchedules] = useState(false);
+  const [attMonth, setAttMonth] = useState(String(new Date().getMonth() + 1));
+  const [attYear, setAttYear] = useState(String(new Date().getFullYear()));
+
+  const isTutorOrTL = ['Tutor', 'Team Leader'].includes(currentUser?.role);
 
   useEffect(() => {
     async function load() {
@@ -80,7 +111,6 @@ export default function Dashboard() {
 
       // Role-specific stats
       if (currentUser?.role === 'Tutor') {
-        // Tutor-specific: show their own evaluations
         statsData.myQcRecords = qcRecs.filter(q => q.tutor_id === currentUser.id).length;
         statsData.myFeedbackRecords = fbRecs.filter(f => f.tutor_id === currentUser.id).length;
       }
@@ -90,6 +120,86 @@ export default function Dashboard() {
     }
     load();
   }, []);
+
+  // Load BO Schedule records for the logged-in Tutor / Team Leader
+  useEffect(() => {
+    if (!isTutorOrTL || !currentUser?.full_name) return;
+
+    async function loadMySchedules() {
+      setLoadingSchedules(true);
+      try {
+        const { data, error } = await supabase
+          .from('BoScheduleRecord')
+          .select('*')
+          .eq('lesson_month', Number(attMonth))
+          .eq('lesson_year', Number(attYear));
+
+        if (error) throw error;
+
+        const myName = currentUser.full_name.toLowerCase().trim();
+        const mine = (data || []).filter((r) => {
+          if (r.is_test_group) return false;
+          const teacher = (r.lesson_teacher || '').toLowerCase().trim();
+          return teacher && (teacher === myName || teacher.includes(myName) || myName.includes(teacher));
+        });
+
+        setMyScheduleRecords(mine);
+      } catch (err) {
+        console.error('Error loading tutor weekly attendance:', err.message);
+      } finally {
+        setLoadingSchedules(false);
+      }
+    }
+
+    loadMySchedules();
+  }, [isTutorOrTL, currentUser?.full_name, attMonth, attYear]);
+
+  const weeklyTeachingSummary = useMemo(() => {
+    const rows = WEEKS_LIST.map((wk) => {
+      const wkRows = myScheduleRecords.filter((r) => r.week_label === wk);
+      const conducted = wkRows.filter((r) => r.is_conducted);
+      const groupCount = conducted.filter((r) => r.group_type?.toLowerCase() === 'group').length;
+      const indivCount = conducted.filter((r) => r.group_type?.toLowerCase() === 'individual').length;
+      const intensCount = conducted.filter((r) => r.group_type?.toLowerCase() === 'intensive').length;
+      const kidsAttended = conducted.reduce((s, r) => s + (r.students_attended || 0), 0);
+      const avgAtt = conducted.length
+        ? Math.round(conducted.reduce((s, r) => s + (r.attendance_pct || 0), 0) / conducted.length)
+        : 0;
+
+      return {
+        week: wk,
+        scheduled: wkRows.length,
+        conducted: conducted.length,
+        groupCount,
+        indivCount,
+        intensCount,
+        kidsAttended,
+        avgAtt,
+      };
+    });
+
+    const totalConducted = rows.reduce((s, r) => s + r.conducted, 0);
+    const totalGroup = rows.reduce((s, r) => s + r.groupCount, 0);
+    const totalIndiv = rows.reduce((s, r) => s + r.indivCount, 0);
+    const totalIntens = rows.reduce((s, r) => s + r.intensCount, 0);
+    const totalKids = rows.reduce((s, r) => s + r.kidsAttended, 0);
+    const allConductedRows = myScheduleRecords.filter((r) => r.is_conducted);
+    const overallAvgAtt = allConductedRows.length
+      ? Math.round(allConductedRows.reduce((s, r) => s + (r.attendance_pct || 0), 0) / allConductedRows.length)
+      : 0;
+
+    return {
+      rows,
+      totals: {
+        conducted: totalConducted,
+        groupCount: totalGroup,
+        indivCount: totalIndiv,
+        intensCount: totalIntens,
+        kidsAttended: totalKids,
+        avgAtt: overallAvgAtt,
+      },
+    };
+  }, [myScheduleRecords]);
 
   const isAdmin = currentUser?.role && !['Tutor'].includes(currentUser.role);
   const isTutor = currentUser?.role === 'Tutor';
@@ -248,15 +358,97 @@ export default function Dashboard() {
       )}
 
       {/* My Tasks & My Student Feedback (Tutor / Team Leader) */}
-      {['Tutor', 'Team Leader'].includes(currentUser?.role) && (
+      {isTutorOrTL && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <TutorTasksPanel />
           <MyWeeklyFeedbackPanel />
         </div>
       )}
 
+      {/* My Weekly Teaching & Attendance Recap (Tutor / Team Leader) */}
+      {isTutorOrTL && (
+        <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <CalendarCheck className="w-5 h-5 text-primary" />
+                <h2 className="font-semibold text-foreground">My Weekly Teaching &amp; Attendance</h2>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Weekly breakdown of your conducted lessons and student attendance from BO LMS records.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Select value={attMonth} onValueChange={setAttMonth}>
+                <SelectTrigger className="w-[130px] h-9 bg-muted border-border text-xs">
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MONTHS_LIST.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={attYear} onValueChange={setAttYear}>
+                <SelectTrigger className="w-[95px] h-9 bg-muted border-border text-xs">
+                  <SelectValue placeholder="Year" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="2026">2026</SelectItem>
+                  <SelectItem value="2025">2025</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {loadingSchedules ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-muted-foreground border-b border-border">
+                    <th className="py-2.5 font-medium">Week Period</th>
+                    <th className="py-2.5 font-medium text-center">Conducted Lessons</th>
+                    <th className="py-2.5 font-medium text-center">Group</th>
+                    <th className="py-2.5 font-medium text-center">Indiv</th>
+                    <th className="py-2.5 font-medium text-center">Intensive</th>
+                    <th className="py-2.5 font-medium text-center">Kids Attended</th>
+                    <th className="py-2.5 font-medium text-right">Avg Attendance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {weeklyTeachingSummary.rows.map((w) => (
+                    <tr key={w.week} className="hover:bg-secondary/30">
+                      <td className="py-2.5 font-medium text-foreground">{w.week}</td>
+                      <td className="py-2.5 text-center font-semibold text-primary">{w.conducted}</td>
+                      <td className="py-2.5 text-center text-muted-foreground">{w.groupCount}</td>
+                      <td className="py-2.5 text-center text-muted-foreground">{w.indivCount}</td>
+                      <td className="py-2.5 text-center text-muted-foreground">{w.intensCount}</td>
+                      <td className="py-2.5 text-center text-foreground">{w.kidsAttended}</td>
+                      <td className="py-2.5 text-right font-medium text-chart-3">{w.avgAtt}%</td>
+                    </tr>
+                  ))}
+                  <tr className="bg-secondary/50 font-semibold">
+                    <td className="py-3 text-foreground">Total (Month-to-Date)</td>
+                    <td className="py-3 text-center text-primary">{weeklyTeachingSummary.totals.conducted}</td>
+                    <td className="py-3 text-center text-foreground">{weeklyTeachingSummary.totals.groupCount}</td>
+                    <td className="py-3 text-center text-foreground">{weeklyTeachingSummary.totals.indivCount}</td>
+                    <td className="py-3 text-center text-foreground">{weeklyTeachingSummary.totals.intensCount}</td>
+                    <td className="py-3 text-center text-foreground">{weeklyTeachingSummary.totals.kidsAttended}</td>
+                    <td className="py-3 text-right text-chart-3">{weeklyTeachingSummary.totals.avgAtt}%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* QC submission form — tutor identity comes from the signed-in account */}
-      {['Tutor', 'Team Leader'].includes(currentUser?.role) && <QCSubmissionPanel />}
+      {isTutorOrTL && <QCSubmissionPanel />}
 
       {/* Role-based Quick Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

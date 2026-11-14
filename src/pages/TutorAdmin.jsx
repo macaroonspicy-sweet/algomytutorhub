@@ -371,6 +371,17 @@ export default function TutorAdmin() {
         if (upsertErr) throw upsertErr;
       }
 
+      // Compute accurate student count per class across existing DB records + newly parsed rows
+      const classKidsMap = new Map();
+      for (const item of [...records, ...parsed]) {
+        const key = String(item.group_id || item.group_title || '').toLowerCase().trim();
+        if (!key) continue;
+        const count = Math.max(Number(item.students_count) || 0, Number(item.students_attended) || 0);
+        if (count > (classKidsMap.get(key) || 0)) {
+          classKidsMap.set(key, count);
+        }
+      }
+
       const eligibleMultiple4 = parsed.filter(
         (r) =>
           !r.is_test_group &&
@@ -404,6 +415,11 @@ export default function TutorAdmin() {
           existingSignatures.add(sig);
 
           const weekBounds = getWeekBoundsFromDate(row.lesson_date);
+          const classKey = String(row.group_id || row.group_title || '').toLowerCase().trim();
+          const detectedStudentCount =
+            classKidsMap.get(classKey) ||
+            Math.max(Number(row.students_count) || 0, Number(row.students_attended) || 0) ||
+            1;
 
           tasksToCreate.push({
             id: makeId(),
@@ -415,6 +431,9 @@ export default function TutorAdmin() {
             start_date: row.lesson_date,
             deadline: weekBounds.end,
             status: 'pending',
+            student_count: detectedStudentCount,
+            completed_count: 0,
+            course_name: row.course || '',
             assigned_tutor_id: matchedUser?.id || null,
             assigned_tutor_name: matchedUser?.full_name || row.lesson_teacher || 'Unassigned Tutor',
             assigned_by_id: currentUser?.id || null,

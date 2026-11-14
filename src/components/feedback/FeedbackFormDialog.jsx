@@ -1,471 +1,1123 @@
-const db = globalThis.__B44_DB__ || { 
-  auth: { isAuthenticated: async () => false, me: async () => null }, 
-  entities: new Proxy({}, { 
-    get: () => ({ 
-      filter: async () => [], 
-      get: async () => null, 
-      create: async () => ({}), 
-      update: async () => ({}), 
-      delete: async () => ({}) 
-    }) 
-  }), 
-  integrations: { Core: { UploadFile: async () => ({ file_url: '' }) } } 
-};
-
-import React, { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import React, { useEffect, useMemo, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
+import { useAppAuth } from '@/lib/AppAuthContext';
+import {
+  parseBoScheduleFile,
+  getNextMondayISO,
+  getWeekBoundsFromDate,
+} from '@/lib/boCsvParser';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2 } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import Pagination from '@/components/ui/pagination';
+import {
+  Upload,
+  FileSpreadsheet,
+  Loader2,
+  Users,
+  BookOpen,
+  CalendarCheck,
+  Sparkles,
+  Percent,
+  Bell,
+  Search,
+  CheckCircle2,
+} from 'lucide-react';
 import { toast } from 'sonner';
-import StarPointInput from './StarPointInput';
-import PerformancePointPicker from './PerformancePointPicker';
-import { useAppAuth } from '@/lib/AppAuthContext';
 
-const TODAY = new Date().toISOString().split('T')[0];
+const MONTHS = [
+  { value: '1', label: 'January' },
+  { value: '2', label: 'February' },
+  { value: '3', label: 'March' },
+  { value: '4', label: 'April' },
+  { value: '5', label: 'May' },
+  { value: '6', label: 'June' },
+  { value: '7', label: 'July' },
+  { value: '8', label: 'August' },
+  { value: '9', label: 'September' },
+  { value: '10', label: 'October' },
+  { value: '11', label: 'November' },
+  { value: '12', label: 'December' },
+];
 
-const EMPTY_FORM = {
-  student_name: '',
-  course_category_id: '',
-  course_name: '',
-  month: '',
-  class_code: '',
-  tutor_id: '',
-  tutor_name: '',
-  tutor_photo: '',
-  tutor_telegram: '',
-  point: 0,
-  project_link: '',
-  module_topic: '',
-  key_result: '',
-  new_skills: '',
-  presence: '',
-  involvement_difficulty: '',
-  task_completion: '',
-  tutor_note: '',
-  record_date: TODAY,
-  record_month: new Date().getMonth() + 1,
-  record_year: new Date().getFullYear(),
-};
+const WEEKS = [
+  'Week 1 (1–7)',
+  'Week 2 (8–14)',
+  'Week 3 (15–21)',
+  'Week 4 (22–End)',
+];
 
-export default function FeedbackFormDialog({ open, onOpenChange, editing, onSaved }) {
+const ITEMS_PER_PAGE = 15;
+
+const makeId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+function KpiCard({ label, value, sub, icon: Icon, tone }) {
+  return (
+    <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
+      <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${tone}`}>
+        <Icon className="w-5 h-5 text-white" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-2xl font-bold text-foreground leading-tight">{value}</div>
+        <div className="text-xs font-medium text-foreground/80 truncate">{label}</div>
+        {sub && <div className="text-[11px] text-muted-foreground truncate mt-0.5">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+export default function TutorAdmin() {
   const { currentUser } = useAppAuth();
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
-
-  // Master data
+  const [records, setRecords] = useState([]);
   const [tutors, setTutors] = useState([]);
-  const [courses, setCourses] = useState([]);
-  const [modules, setModules] = useState([]);
-  const [perfCategories, setPerfCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
+  const [selectedYear, setSelectedYear] = useState('2026');
+  const [selectedWeek, setSelectedWeek] = useState('all');
+  const [selectedCourse, setSelectedCourse] = useState('all');
+  const [selectedTutor, setSelectedTutor] = useState('all');
+  const [search, setSearch] = useState('');
+  const [includeTest, setIncludeTest] = useState(false);
+
+  const [activeTab, setActiveTab] = useState('overview');
+  const [page, setPage] = useState(1);
+
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [cutoffDate, setCutoffDate] = useState(() => getNextMondayISO());
+  const [importing, setImporting] = useState(false);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      // Fetch all records in batches of 1,000 rows to bypass Supabase default row limits
+      let allRecords = [];
+      let from = 0;
+      const step = 1000;
+
+      while (true) {
+        const { data, error } = await supabase
+          .from('BoScheduleRecord')
+          .select('*')
+          .order('lesson_date', { ascending: false })
+          .order('unique_key', { ascending: true })
+          .range(from, from + step - 1);
+
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+
+        allRecords = allRecords.concat(data);
+        if (data.length < step) break;
+        from += step;
+      }
+
+      const { data: userData } = await supabase
+        .from('CustomUser')
+        .select('id, full_name, role, is_active')
+        .in('role', ['Tutor', 'Team Leader']);
+
+      setRecords(allRecords);
+      setTutors((userData || []).filter((u) => u.is_active !== false));
+    } catch (err) {
+      toast.error('Failed to load Tutor Administration data', { description: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    Promise.all([
-      db.entities.CustomUser.list(),
-      db.entities.CourseCategory.list(),
-      db.entities.ModuleCategory.list(),
-      db.entities.StudentPerformanceCategory.list(),
-    ]).then(([users, cats, mods, perfs]) => {
-      setTutors(users.filter(u => u.role === 'Tutor' || u.role === 'Team Leader'));
-      setCourses(cats.filter(c => c.is_active !== false));
-      setModules(mods);
-      setPerfCategories(perfs.filter(p => p.is_active !== false));
-    });
+    loadData();
   }, []);
 
+  const courseOptions = useMemo(() => {
+    const set = new Set(records.map((r) => r.course).filter(Boolean));
+    return Array.from(set).sort();
+  }, [records]);
+
+  const teacherOptions = useMemo(() => {
+    const set = new Set(records.map((r) => r.lesson_teacher).filter(Boolean));
+    return Array.from(set).sort();
+  }, [records]);
+
+  const filteredRecords = useMemo(() => {
+    return records.filter((r) => {
+      if (!includeTest && r.is_test_group) return false;
+      if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
+      if (selectedMonth !== 'all' && String(r.lesson_month) !== selectedMonth) return false;
+      if (selectedWeek !== 'all' && r.week_label !== selectedWeek) return false;
+      if (selectedCourse !== 'all' && r.course !== selectedCourse) return false;
+      if (selectedTutor !== 'all' && r.lesson_teacher !== selectedTutor) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const hay = `${r.group_title || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${r.course || ''} ${r.lesson_title || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [
+    records,
+    includeTest,
+    selectedYear,
+    selectedMonth,
+    selectedWeek,
+    selectedCourse,
+    selectedTutor,
+    search,
+  ]);
+
   useEffect(() => {
-    if (open) {
-      if (editing) {
-        const norm = { ...EMPTY_FORM, ...editing };
-        if (norm.course_name && norm.course_category_id !== norm.course_name) {
-          norm.course_category_id = norm.course_name;
-        }
-        setForm(norm);
-      } else {
-        // Auto-fill tutor data from the currently logged-in account when opening a new form
-        setForm({
-          ...EMPTY_FORM,
-          tutor_id: currentUser?.id || '',
-          tutor_name: currentUser?.full_name || '',
-          tutor_photo: currentUser?.photo_url || '',
-          tutor_telegram: currentUser?.telegram_account || '',
+    setPage(1);
+  }, [selectedMonth, selectedYear, selectedWeek, selectedCourse, selectedTutor, search, includeTest, activeTab]);
+
+  const conductedRecords = useMemo(
+    () => filteredRecords.filter((r) => r.is_conducted),
+    [filteredRecords]
+  );
+
+  const avgAttendance = useMemo(() => {
+    if (!conductedRecords.length) return 0;
+    const sum = conductedRecords.reduce((acc, r) => acc + (r.attendance_pct || 0), 0);
+    return Math.round(sum / conductedRecords.length);
+  }, [conductedRecords]);
+
+  const groupClasses = useMemo(() => {
+    const map = new Map();
+    for (const r of filteredRecords) {
+      if (!includeTest && r.is_test_group) continue;
+      const key = r.group_id || r.group_title;
+      if (!key) continue;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          group_id: r.group_id || '-',
+          group_title: r.group_title || '-',
+          group_type: r.group_type || '-',
+          course: r.course || '-',
+          teacher: r.lesson_teacher || 'Unassigned',
+          format: r.format || '-',
+          kids_count: Math.max(r.students_count || 0, r.students_attended || 0),
+          total_scheduled: 0,
+          conducted_count: 0,
+          latest_lesson: r.lesson_number || 0,
+          latest_date: r.lesson_date || '',
+          att_sum: 0,
         });
       }
-    }
-  }, [open, editing, currentUser]);
 
-  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
-
-  const handleCourseChange = (courseName) => {
-    setForm(f => ({
-      ...f,
-      course_category_id: courseName,
-      course_name: courseName,
-      month: '',
-      module_topic: '',
-      key_result: '',
-      new_skills: '',
-    }));
-  };
-
-  const handleTutorChange = (id) => {
-    const t = tutors.find(u => u.id === id);
-    if (t) setForm(f => ({ ...f, tutor_id: id, tutor_name: t.full_name, tutor_photo: t.photo_url || '', tutor_telegram: t.telegram_account || '' }));
-  };
-
-  // Filtered modules based on selected course
-  const courseModules = modules.filter(m => m.course_name === form.course_category_id);
-  const availableMonths = [...new Set(courseModules.map(m => m.month).filter(Boolean))].sort((a, b) => a - b);
-  const moduleTopics = [...new Set(courseModules.map(m => m.module_topic).filter(Boolean))];
-  const keyResults = [...new Set(courseModules.map(m => m.key_result).filter(Boolean))];
-  const newSkillsList = [...new Set(courseModules.map(m => m.new_skills).filter(Boolean))];
-
-  const handleMonthChange = (monthNum) => {
-    const mod = courseModules.find(m => Number(m.month) === Number(monthNum));
-    setForm(f => ({
-      ...f,
-      month: monthNum,
-      module_topic: mod?.module_topic || '',
-      key_result: mod?.key_result || '',
-      new_skills: mod?.new_skills || '',
-    }));
-  };
-
-  const courseSelected = !!form.course_category_id;
-
-  const requiredComplete =
-    !!form.student_name?.trim() &&
-    !!form.course_category_id &&
-    !!form.month &&
-    !!form.class_code?.trim() &&
-    !!form.tutor_id &&
-    Number(form.point) > 0 &&
-    !!form.presence &&
-    !!form.involvement_difficulty &&
-    !!form.task_completion;
-
-  const handleSave = async () => {
-    setSaving(true);
-    const dateParts = (form.record_date || TODAY).split('-');
-    const studentName = form.student_name || 'Student';
-
-    const bakePerf = (val) => {
-      if (!val || !val.includes('::')) return val;
-      const parts = val.split('::');
-      const aspectKey = parts[0];
-      const pointNum = parseInt(parts[1]);
-      const aspect = perfCategories.find(a => a.aspect_title === aspectKey || a.id === aspectKey);
-      const template = aspect?.[`point_${pointNum}_description`];
-      if (!template) return val;
-      const baked = template.replace(/\(Student Name\)/gi, studentName).replace(/\[Student Name\]/gi, studentName);
-      return `${aspect.aspect_title}::${pointNum}::${baked}`;
-    };
-
-    const saveForm = {
-      ...form,
-      presence: bakePerf(form.presence),
-      involvement_difficulty: bakePerf(form.involvement_difficulty),
-      task_completion: bakePerf(form.task_completion),
-      record_month: dateParts[1] ? parseInt(dateParts[1]) : new Date().getMonth() + 1,
-      record_year: dateParts[0] ? parseInt(dateParts[0]) : new Date().getFullYear(),
-      ...(editing ? {} : {
-        created_by_name: currentUser?.full_name || '',
-        created_by_role: currentUser?.role || '',
-      }),
-    };
-
-    try {
-      if (editing) {
-        await db.entities.FeedbackRecord.update(editing.id, saveForm);
-      } else {
-        const created = await db.entities.FeedbackRecord.create(saveForm);
-        if (currentUser?.role === 'Tutor' || currentUser?.role === 'Team Leader') {
-          const admins = await db.entities.CustomUser.filter({ is_active: true });
-          const adminUsers = admins.filter(u => ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team'].includes(u.role));
-          await Promise.all(adminUsers.map(admin =>
-            db.entities.Notification.create({
-              recipient_id: admin.id,
-              type: 'feedback_created',
-              title: 'New Student Feedback',
-              message: `${currentUser.full_name} submitted feedback for student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
-              reference_id: created?.id || '',
-              is_read: false,
-            })
-          ));
-        } else if (saveForm.tutor_id) {
-          await db.entities.Notification.create({
-            recipient_id: saveForm.tutor_id,
-            type: 'feedback_created',
-            title: 'New Student Feedback',
-            message: `${currentUser?.full_name || 'Admin'} recorded feedback for your student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
-            reference_id: created?.id || '',
-            is_read: false,
-          });
-        }
+      const item = map.get(key);
+      item.total_scheduled += 1;
+      item.kids_count = Math.max(item.kids_count, r.students_count || 0, r.students_attended || 0);
+      if (r.lesson_teacher && item.teacher === 'Unassigned') {
+        item.teacher = r.lesson_teacher;
       }
-      setSaving(false);
-      onSaved();
-    } catch (err) {
-      console.error('Error saving feedback:', err);
-      toast.error('Failed to save feedback: ' + (err.message || 'An unexpected error occurred'));
-      setSaving(false);
+      if (r.is_conducted) {
+        item.conducted_count += 1;
+        item.att_sum += r.attendance_pct || 0;
+      }
+      if ((r.lesson_date || '') >= item.latest_date) {
+        item.latest_date = r.lesson_date || '';
+        item.latest_lesson = Math.max(item.latest_lesson, r.lesson_number || 0);
+      }
     }
+
+    return Array.from(map.values())
+      .map((c) => ({
+        ...c,
+        avg_attendance: c.conducted_count ? Math.round(c.att_sum / c.conducted_count) : 0,
+      }))
+      .sort((a, b) => a.group_title.localeCompare(b.group_title));
+  }, [filteredRecords, includeTest]);
+
+  const totalKids = useMemo(
+    () => groupClasses.reduce((sum, c) => sum + c.kids_count, 0),
+    [groupClasses]
+  );
+
+  const weeklySummary = useMemo(() => {
+    return WEEKS.map((wk) => {
+      const rows = filteredRecords.filter((r) => r.week_label === wk);
+      const cond = rows.filter((r) => r.is_conducted);
+      const groupCount = cond.filter((r) => r.group_type?.toLowerCase() === 'group').length;
+      const indivCount = cond.filter((r) => r.group_type?.toLowerCase() === 'individual').length;
+      const intensCount = cond.filter((r) => r.group_type?.toLowerCase() === 'intensive').length;
+      const totalAttended = cond.reduce((s, r) => s + (r.students_attended || 0), 0);
+      const avgAtt = cond.length
+        ? Math.round(cond.reduce((s, r) => s + (r.attendance_pct || 0), 0) / cond.length)
+        : 0;
+
+      return {
+        week: wk,
+        scheduled: rows.length,
+        conducted: cond.length,
+        groupCount,
+        indivCount,
+        intensCount,
+        totalAttended,
+        avgAtt,
+      };
+    });
+  }, [filteredRecords]);
+
+  const courseSummary = useMemo(() => {
+    const map = new Map();
+    for (const cls of groupClasses) {
+      const cName = cls.course || 'Other';
+      if (!map.has(cName)) {
+        map.set(cName, {
+          course: cName,
+          class_count: 0,
+          kids_count: 0,
+          conducted_lessons: 0,
+        });
+      }
+      const entry = map.get(cName);
+      entry.class_count += 1;
+      entry.kids_count += cls.kids_count;
+      entry.conducted_lessons += cls.conducted_count;
+    }
+    return Array.from(map.values()).sort((a, b) => b.kids_count - a.kids_count);
+  }, [groupClasses]);
+
+  const lesson1Records = useMemo(() => {
+    return filteredRecords
+      .filter((r) => !r.is_test_group && r.lesson_number === 1)
+      .sort((a, b) => (a.lesson_date || '').localeCompare(b.lesson_date || ''));
+  }, [filteredRecords]);
+
+  const lesson1ByCourse = useMemo(() => {
+    const map = new Map();
+    for (const r of lesson1Records) {
+      const cName = r.course || 'Other';
+      if (!map.has(cName)) {
+        map.set(cName, {
+          course: cName,
+          total_classes: 0,
+          conducted_classes: 0,
+          total_kids: 0,
+        });
+      }
+      const item = map.get(cName);
+      item.total_classes += 1;
+      if (r.is_conducted) item.conducted_classes += 1;
+      item.total_kids += Math.max(r.students_count || 0, r.students_attended || 0);
+    }
+    return Array.from(map.values()).sort((a, b) => b.total_classes - a.total_classes);
+  }, [lesson1Records]);
+
+  const multiple4Count = useMemo(
+    () =>
+      filteredRecords.filter(
+        (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
+      ).length,
+    [filteredRecords]
+  );
+
+  const matchTutorUser = (teacherName) => {
+    if (!teacherName) return null;
+    const clean = teacherName.toLowerCase().trim();
+    return (
+      tutors.find((u) => u.full_name?.toLowerCase().trim() === clean) ||
+      tutors.find(
+        (u) =>
+          u.full_name?.toLowerCase().includes(clean) ||
+          clean.includes(u.full_name?.toLowerCase().trim() || '___')
+      ) ||
+      null
+    );
   };
 
-  // Custom submit button click handler for mobile / touch screen devices
-  const handleSubmitClick = (e) => {
-    e.preventDefault();
-    if (!requiredComplete) {
-      toast.error('Incomplete Form', {
-        description: 'Please ensure Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task Completion are filled in.',
-      });
+  const handleImportSubmit = async () => {
+    if (!importFile) {
+      toast.error('Please select a CSV or Excel file from BO first');
       return;
     }
-    handleSave();
+
+    setImporting(true);
+    try {
+      const parsed = await parseBoScheduleFile(importFile);
+      if (!parsed.length) {
+        toast.error('No valid schedule rows were found in the file');
+        setImporting(false);
+        return;
+      }
+
+      const chunkSize = 300;
+      for (let i = 0; i < parsed.length; i += chunkSize) {
+        const batch = parsed.slice(i, i + chunkSize).map((item) => ({
+          ...item,
+          updated_date: new Date().toISOString(),
+        }));
+
+        const { error: upsertErr } = await supabase
+          .from('BoScheduleRecord')
+          .upsert(batch, { onConflict: 'unique_key' });
+
+        if (upsertErr) throw upsertErr;
+      }
+
+      // Compute accurate student count per class across existing DB records + newly parsed rows
+      const classKidsMap = new Map();
+      for (const item of [...records, ...parsed]) {
+        const key = String(item.group_id || item.group_title || '').toLowerCase().trim();
+        if (!key) continue;
+        const count = Math.max(Number(item.students_count) || 0, Number(item.students_attended) || 0);
+        if (count > (classKidsMap.get(key) || 0)) {
+          classKidsMap.set(key, count);
+        }
+      }
+
+      const eligibleMultiple4 = parsed.filter(
+        (r) =>
+          !r.is_test_group &&
+          r.lesson_number > 0 &&
+          r.lesson_number % 4 === 0 &&
+          r.lesson_date >= cutoffDate
+      );
+
+      let assignedCount = 0;
+      if (eligibleMultiple4.length > 0) {
+        const { data: existingTasks } = await supabase
+          .from('TutorTask')
+          .select('title, linked_class_name')
+          .eq('category', 'Student Feedback');
+
+        const existingSignatures = new Set(
+          (existingTasks || []).map(
+            (t) => `${(t.linked_class_name || '').toLowerCase()}__${(t.title || '').toLowerCase()}`
+          )
+        );
+
+        const now = new Date().toISOString();
+        const tasksToCreate = [];
+
+        for (const row of eligibleMultiple4) {
+          const matchedUser = matchTutorUser(row.lesson_teacher);
+          const taskTitle = `Weekly Report - ${row.group_title} (Lesson ${row.lesson_number})`;
+          const sig = `${row.group_title.toLowerCase()}__${taskTitle.toLowerCase()}`;
+
+          if (existingSignatures.has(sig)) continue;
+          existingSignatures.add(sig);
+
+          const weekBounds = getWeekBoundsFromDate(row.lesson_date);
+          const classKey = String(row.group_id || row.group_title || '').toLowerCase().trim();
+          const detectedStudentCount =
+            classKidsMap.get(classKey) ||
+            Math.max(Number(row.students_count) || 0, Number(row.students_attended) || 0) ||
+            1;
+
+          tasksToCreate.push({
+            id: makeId(),
+            group_id: makeId(),
+            title: taskTitle,
+            description: `Auto-generated from BO Schedule.\nClass: ${row.group_title} (ID: ${row.group_id})\nCourse: ${row.course}\nLesson: Lesson ${row.lesson_number} (${row.lesson_title})\nSchedule: ${row.lesson_datetime}`,
+            category: 'Student Feedback',
+            priority: 'High',
+            start_date: row.lesson_date,
+            deadline: weekBounds.end,
+            status: 'pending',
+            student_count: detectedStudentCount,
+            completed_count: 0,
+            course_name: row.course || '',
+            assigned_tutor_id: matchedUser?.id || null,
+            assigned_tutor_name: matchedUser?.full_name || row.lesson_teacher || 'Unassigned Tutor',
+            assigned_by_id: currentUser?.id || null,
+            assigned_by_name: currentUser?.full_name || 'System (BO Import)',
+            progress_notes: '',
+            completion_notes: '',
+            revision_note: '',
+            revision_requested: false,
+            linked_week_start_date: weekBounds.start,
+            linked_week_end_date: weekBounds.end,
+            linked_class_name: row.group_title,
+            created_date: now,
+            updated_date: now,
+            created_by_id: currentUser?.id || null,
+            is_sample: false,
+          });
+        }
+
+        if (tasksToCreate.length > 0) {
+          const { error: taskErr } = await supabase.from('TutorTask').insert(tasksToCreate);
+          if (taskErr) {
+            console.error('Auto-assign task warning:', taskErr.message);
+          } else {
+            assignedCount = tasksToCreate.length;
+          }
+        }
+
+        // Sync to WeeklyFeedbackAssignment so tasks appear in tutor's My Student Feedback panel (Process button)
+        const { data: existingWeekly } = await supabase
+          .from('WeeklyFeedbackAssignment')
+          .select('class_name, week_start_date, notes');
+
+        const existingWeeklySigs = new Set(
+          (existingWeekly || []).map(
+            (w) => `${(w.class_name || '').toLowerCase()}__${w.week_start_date || ''}__${(w.notes || '').toLowerCase()}`
+          )
+        );
+
+        const weeklyToCreate = [];
+        for (const row of eligibleMultiple4) {
+          const matchedUser = matchTutorUser(row.lesson_teacher);
+          const weekBounds = getWeekBoundsFromDate(row.lesson_date);
+          const noteLabel = `Lesson ${row.lesson_number} (${row.lesson_date})`;
+          const wSig = `${row.group_title.toLowerCase()}__${weekBounds.start}__${noteLabel.toLowerCase()}`;
+
+          if (existingWeeklySigs.has(wSig)) continue;
+          existingWeeklySigs.add(wSig);
+
+          const classKey = String(row.group_id || row.group_title || '').toLowerCase().trim();
+          const detectedStudentCount =
+            classKidsMap.get(classKey) ||
+            Math.max(Number(row.students_count) || 0, Number(row.students_attended) || 0) ||
+            1;
+
+          weeklyToCreate.push({
+            class_code: !isNaN(row.group_id) && row.group_id !== '' ? parseInt(row.group_id, 10) : null,
+            class_name: row.group_title,
+            course_name: row.course || '',
+            tutor_id: matchedUser?.id || null,
+            tutor_name: matchedUser?.full_name || row.lesson_teacher || 'Unassigned Tutor',
+            student_count: detectedStudentCount,
+            completed_count: 0,
+            week_start_date: weekBounds.start,
+            week_end_date: weekBounds.end,
+            status: 'pending',
+            notes: noteLabel,
+            created_date: now,
+            updated_date: now,
+          });
+        }
+
+        if (weeklyToCreate.length > 0) {
+          const { error: weeklyErr } = await supabase
+            .from('WeeklyFeedbackAssignment')
+            .insert(weeklyToCreate);
+          if (weeklyErr) {
+            console.error('WeeklyFeedbackAssignment sync warning:', weeklyErr.message);
+          } else {
+            assignedCount = Math.max(assignedCount, weeklyToCreate.length);
+          }
+        }
+      }
+
+      toast.success(`Successfully imported ${parsed.length} BO schedules!`, {
+        description:
+          assignedCount > 0
+            ? `${assignedCount} Weekly Reports (every 4th lesson starting ${cutoffDate}) were automatically assigned to tutors.`
+            : `Dashboard summary updated (no new 4th-lesson schedules starting ${cutoffDate}).`,
+      });
+
+      setImportOpen(false);
+      setImportFile(null);
+      await loadData();
+    } catch (err) {
+      toast.error('Import failed', { description: err.message });
+    } finally {
+      setImporting(false);
+    }
   };
 
-  const isTutorRole = ['Tutor', 'Team Leader'].includes(currentUser?.role);
+  const handleExportExcel = async () => {
+    if (!filteredRecords.length) {
+      toast.error('No data available in the current filter to export');
+      return;
+    }
+
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
+
+      const sheet1Rows = [
+        ...weeklySummary.map((w) => ({
+          Section: 'Weekly Breakdown',
+          Item: w.week,
+          'Total Scheduled': w.scheduled,
+          'Lessons Conducted': w.conducted,
+          Group: w.groupCount,
+          Individual: w.indivCount,
+          Intensive: w.intensCount,
+          'Students Attended': w.totalAttended,
+          'Avg Attendance (%)': `${w.avgAtt}%`,
+        })),
+        {},
+        ...courseSummary.map((c) => ({
+          Section: 'Course Distribution',
+          Item: c.course,
+          'Total Scheduled': '-',
+          'Lessons Conducted': c.conducted_lessons,
+          Group: `${c.class_count} classes`,
+          Individual: `${c.kids_count} kids`,
+          Intensive: '-',
+          'Students Attended': c.kids_count,
+          'Avg Attendance (%)': '-',
+        })),
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet1Rows), 'Weekly & Course Summary');
+
+      const ws2 = XLSX.utils.json_to_sheet(
+        groupClasses.map((c, i) => ({
+          No: i + 1,
+          'Group ID': c.group_id,
+          'Group Title': c.group_title,
+          Type: c.group_type,
+          Course: c.course,
+          Teacher: c.teacher,
+          'Kids Count': c.kids_count,
+          'Lessons Conducted': c.conducted_count,
+          'Latest Lesson': c.latest_lesson,
+          'Avg Attendance (%)': `${c.avg_attendance}%`,
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws2, 'Group Classes & Kids');
+
+      const ws3 = XLSX.utils.json_to_sheet(
+        lesson1Records.map((r, i) => ({
+          No: i + 1,
+          Date: r.lesson_date,
+          Time: r.lesson_time,
+          'Group ID': r.group_id,
+          'Group Title': r.group_title,
+          Course: r.course,
+          Type: r.group_type,
+          Teacher: r.lesson_teacher || '-',
+          Kids: Math.max(r.students_count || 0, r.students_attended || 0),
+          Status: r.is_conducted ? 'Conducted' : 'Not Conducted',
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws3, 'Lesson 1 Classes');
+
+      const ws4 = XLSX.utils.json_to_sheet(
+        filteredRecords.map((r, i) => ({
+          No: i + 1,
+          Date: r.lesson_date,
+          Time: r.lesson_time,
+          Week: r.week_label,
+          Lesson: r.lesson_number,
+          'Lesson Title': r.lesson_title,
+          'Group ID': r.group_id,
+          'Group Title': r.group_title,
+          'Attendance (%)': `${r.attendance_pct}%`,
+          Students: r.students_raw,
+          Attended: r.students_attended,
+          Teacher: r.lesson_teacher || '-',
+          Type: r.group_type,
+          Course: r.course,
+          Conducted: r.is_conducted ? 'Yes' : 'No',
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws4, 'Raw Schedule');
+
+      const monthLabel =
+        selectedMonth === 'all'
+          ? 'AllMonths'
+          : MONTHS.find((m) => m.value === selectedMonth)?.label || selectedMonth;
+      XLSX.writeFile(wb, `Tutor_Administration_${monthLabel}_${selectedYear}.xlsx`);
+      toast.success('Tutor Administration Excel file downloaded');
+    } catch (err) {
+      toast.error('Failed to export Excel', { description: err.message });
+    }
+  };
+
+  const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
+  const paginatedRaw = filteredRecords.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border max-w-2xl max-h-[92vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{editing ? 'Edit Feedback' : 'Add Student Feedback'}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 pt-2">
+    <div className="space-y-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Tutor Administration</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            BO LMS attendance summary, group classes, kids per course, monthly Lesson 1, & auto-assign every 4th-lesson Weekly Report.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={handleExportExcel} className="border-border gap-2">
+            <FileSpreadsheet className="w-4 h-4" /> Export Excel
+          </Button>
+          <Button onClick={() => setImportOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+            <Upload className="w-4 h-4" /> Import CSV / Excel BO
+          </Button>
+        </div>
+      </div>
 
-          {/* Record Date */}
-          <Field label="Record Date">
+      <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+            <SelectTrigger><SelectValue placeholder="Month" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Months</SelectItem>
+              {MONTHS.map((m) => (
+                <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={selectedYear} onValueChange={setSelectedYear}>
+            <SelectTrigger><SelectValue placeholder="Year" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Years</SelectItem>
+              <SelectItem value="2026">2026</SelectItem>
+              <SelectItem value="2025">2025</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={selectedWeek} onValueChange={setSelectedWeek}>
+            <SelectTrigger><SelectValue placeholder="Week" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Weeks (W1–W4)</SelectItem>
+              {WEEKS.map((w) => (
+                <SelectItem key={w} value={w}>{w}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={selectedCourse} onValueChange={setSelectedCourse}>
+            <SelectTrigger><SelectValue placeholder="Course" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Courses</SelectItem>
+              {courseOptions.map((c) => (
+                <SelectItem key={c} value={c}>{c}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={selectedTutor} onValueChange={setSelectedTutor}>
+            <SelectTrigger><SelectValue placeholder="Tutor" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Tutors</SelectItem>
+              {teacherOptions.map((t) => (
+                <SelectItem key={t} value={t}>{t}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              type="date"
-              value={form.record_date || TODAY}
-              onChange={e => set('record_date', e.target.value)}
-              className="bg-muted border-border"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search class / ID / tutor..."
+              className="pl-9"
             />
-          </Field>
+          </div>
+        </div>
 
-          {/* Student Name */}
-          <Field label="Student Name *">
-            <Input 
-              value={form.student_name} 
-              onChange={e => set('student_name', e.target.value)} 
-              placeholder="Enter student name..." 
-              className="bg-muted border-border" 
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground pt-1">
+          <span>
+            Showing <strong>{filteredRecords.length}</strong> schedules ({conductedRecords.length} valid conducted lessons) · Total database: {records.length} rows
+          </span>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={includeTest}
+              onChange={(e) => setIncludeTest(e.target.checked)}
+              className="rounded border-border"
             />
-          </Field>
+            <span>Show Test Groups</span>
+          </label>
+        </div>
+      </div>
 
-          {/* Course Name */}
-          <Field label="Course Name *">
-            <Select value={form.course_category_id} onValueChange={handleCourseChange}>
-              <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select course..." /></SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {courses.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </Field>
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+        <KpiCard label="Lessons Conducted" value={conductedRecords.length} sub={`out of ${filteredRecords.length} schedules`} icon={CalendarCheck} tone="bg-primary" />
+        <KpiCard label="Active Classes" value={groupClasses.length} sub="Group / Indiv / Intensive" icon={BookOpen} tone="bg-chart-3" />
+        <KpiCard label="Total Kids" value={totalKids} sub="Accumulated students per class" icon={Users} tone="bg-accent" />
+        <KpiCard label="Lesson 1 This Month" value={lesson1Records.length} sub={`${lesson1ByCourse.length} distinct courses`} icon={Sparkles} tone="bg-chart-4" />
+        <KpiCard label="Avg Attendance" value={`${avgAttendance}%`} sub="Average across conducted classes" icon={Percent} tone="bg-chart-2" />
+        <KpiCard label="Every 4th Lesson" value={multiple4Count} sub="Lesson 4, 8, 12, 16..." icon={Bell} tone="bg-chart-5" />
+      </div>
 
-          {/* Month */}
-          <Field label="Month *">
-            <Select value={form.month ? String(form.month) : ''} onValueChange={v => handleMonthChange(Number(v))} disabled={!courseSelected}>
-              <SelectTrigger className="bg-muted border-border disabled:opacity-50"><SelectValue placeholder={courseSelected ? 'Select month...' : 'Select course first'} /></SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {availableMonths.map(m => <SelectItem key={m} value={String(m)}>Month {m}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </Field>
+      <div className="flex flex-wrap gap-2 border-b border-border pb-2">
+        {[
+          { id: 'overview', label: 'Weekly & Course Summary' },
+          { id: 'classes', label: `Group Classes & Kids (${groupClasses.length})` },
+          { id: 'lesson1', label: `Lesson 1 This Month (${lesson1Records.length})` },
+          { id: 'raw', label: `Schedule Log (${filteredRecords.length})` },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+              activeTab === tab.id
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-          {/* Class Code */}
-          <Field label="Class Code *">
-            <Input 
-              value={form.class_code} 
-              onChange={e => set('class_code', e.target.value)} 
-              placeholder="Enter class code..." 
-              className="bg-muted border-border" 
-            />
-          </Field>
+      {loading ? (
+        <div className="flex justify-center py-16">
+          <Loader2 className="w-7 h-7 animate-spin text-primary" />
+        </div>
+      ) : (
+        <>
+          {activeTab === 'overview' && (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <div className="bg-card border border-border rounded-2xl p-5">
+                <h2 className="font-semibold text-foreground mb-1">Attendance & Lessons per Week</h2>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Valid criteria: non-Test Group, S Lesson Status &gt; 0%, and Students Attended ≥ 1.
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-muted-foreground border-b border-border">
+                        <th className="py-2.5 font-medium">Period</th>
+                        <th className="py-2.5 font-medium text-center">Conducted</th>
+                        <th className="py-2.5 font-medium text-center">Group</th>
+                        <th className="py-2.5 font-medium text-center">Indiv</th>
+                        <th className="py-2.5 font-medium text-center">Intensive</th>
+                        <th className="py-2.5 font-medium text-center">Attended</th>
+                        <th className="py-2.5 font-medium text-right">Avg %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {weeklySummary.map((w) => (
+                        <tr key={w.week}>
+                          <td className="py-2.5 font-medium text-foreground">{w.week}</td>
+                          <td className="py-2.5 text-center font-semibold text-primary">{w.conducted}</td>
+                          <td className="py-2.5 text-center text-muted-foreground">{w.groupCount}</td>
+                          <td className="py-2.5 text-center text-muted-foreground">{w.indivCount}</td>
+                          <td className="py-2.5 text-center text-muted-foreground">{w.intensCount}</td>
+                          <td className="py-2.5 text-center text-foreground">{w.totalAttended}</td>
+                          <td className="py-2.5 text-right font-medium text-chart-3">{w.avgAtt}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-          {/* Tutor Name (Auto-filled & Locked for Tutor/Team Leader Roles) */}
-          <Field label="Tutor Name *">
-            {isTutorRole ? (
-              <Input
-                value={form.tutor_name || currentUser?.full_name || ''}
-                disabled
-                className="bg-muted/60 border-border font-medium text-foreground cursor-not-allowed opacity-80"
-              />
-            ) : (
-              <Select value={form.tutor_id} onValueChange={handleTutorChange}>
-                <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select tutor..." /></SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {tutors.map(t => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-
-          {/* Point */}
-          <Field label="Point (0 – 5) *">
-            <StarPointInput value={form.point} onChange={v => set('point', v)} />
-          </Field>
-
-          {/* Project Link */}
-          <Field label="Project (Link)">
-            <Input value={form.project_link} onChange={e => set('project_link', e.target.value)} placeholder="https://..." className="bg-muted border-border" />
-          </Field>
-
-          {/* Module Topic */}
-          <Field label="Module Topic">
-            {!courseSelected ? (
-              <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground opacity-50">Select course first</div>
-            ) : (
-              <div className="space-y-1.5">
-                {moduleTopics.length === 0 ? (
-                  <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground italic">No module topics available</div>
+              <div className="bg-card border border-border rounded-2xl p-5">
+                <h2 className="font-semibold text-foreground mb-1">Class & Kids Distribution per Course</h2>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Active classes, total kids, and conducted lessons per course.
+                </p>
+                {courseSummary.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-6 text-center">No data available for this filter.</p>
                 ) : (
-                  <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2">
-                    {moduleTopics.map((t, i) => (
-                      <label key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer transition-all ${form.module_topic === t ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted'}`}>
-                        <input type="radio" name="module_topic" checked={form.module_topic === t} onChange={() => set('module_topic', t)} className="hidden" />
-                        <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 mt-0.5 ${form.module_topic === t ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
-                        <span className="text-sm text-foreground leading-relaxed">{t}</span>
-                      </label>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-muted-foreground border-b border-border">
+                          <th className="py-2.5 font-medium">Course</th>
+                          <th className="py-2.5 font-medium text-center">Classes</th>
+                          <th className="py-2.5 font-medium text-center">Total Kids</th>
+                          <th className="py-2.5 font-medium text-right">Conducted</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {courseSummary.map((c) => (
+                          <tr key={c.course}>
+                            <td className="py-2.5 font-medium text-foreground max-w-[260px] truncate" title={c.course}>
+                              {c.course}
+                            </td>
+                            <td className="py-2.5 text-center text-foreground">{c.class_count}</td>
+                            <td className="py-2.5 text-center font-semibold text-primary">{c.kids_count}</td>
+                            <td className="py-2.5 text-right text-chart-3 font-medium">{c.conducted_lessons}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'classes' && (
+            <div className="bg-card border border-border rounded-2xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary/50 text-xs text-muted-foreground">
+                    <tr className="text-left">
+                      <th className="px-4 py-3 font-medium">Group ID</th>
+                      <th className="px-4 py-3 font-medium">Class Name</th>
+                      <th className="px-4 py-3 font-medium">Type</th>
+                      <th className="px-4 py-3 font-medium">Course</th>
+                      <th className="px-4 py-3 font-medium">Tutor</th>
+                      <th className="px-4 py-3 font-medium text-center">Kids</th>
+                      <th className="px-4 py-3 font-medium text-center">Conducted</th>
+                      <th className="px-4 py-3 font-medium text-center">Latest Lesson</th>
+                      <th className="px-4 py-3 font-medium text-right">Avg Att</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {groupClasses.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-10 text-center text-muted-foreground text-sm">
+                          No class data found for this filter.
+                        </td>
+                      </tr>
+                    ) : (
+                      groupClasses.map((cls) => (
+                        <tr key={`${cls.group_id}-${cls.group_title}`} className="hover:bg-secondary/30">
+                          <td className="px-4 py-3 text-xs text-muted-foreground font-mono">{cls.group_id}</td>
+                          <td className="px-4 py-3 font-medium text-foreground">{cls.group_title}</td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className="px-2 py-0.5 rounded-full bg-secondary text-foreground">
+                              {cls.group_type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground max-w-[220px] truncate" title={cls.course}>
+                            {cls.course}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-foreground whitespace-nowrap">{cls.teacher}</td>
+                          <td className="px-4 py-3 text-center font-semibold text-primary">{cls.kids_count}</td>
+                          <td className="px-4 py-3 text-center text-foreground">{cls.conducted_count}</td>
+                          <td className="px-4 py-3 text-center text-xs">
+                            <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                              Lesson {cls.latest_lesson}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-xs font-medium text-chart-3">
+                            {cls.avg_attendance}%
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'lesson1' && (
+            <div className="space-y-5">
+              <div className="bg-card border border-border rounded-2xl p-5">
+                <h2 className="font-semibold text-foreground mb-3">Lesson 1 Course Summary (New Classes)</h2>
+                {lesson1ByCourse.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No Lesson 1 schedules found in this period.</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {lesson1ByCourse.map((item) => (
+                      <div key={item.course} className="border border-border rounded-xl p-3.5 bg-secondary/30">
+                        <div className="text-sm font-semibold text-foreground truncate" title={item.course}>
+                          {item.course}
+                        </div>
+                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                          <span>Total: <strong className="text-foreground">{item.total_classes}</strong> classes</span>
+                          <span>Conducted: <strong className="text-chart-3">{item.conducted_classes}</strong></span>
+                          <span>Kids: <strong className="text-primary">{item.total_kids}</strong></span>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
               </div>
-            )}
-          </Field>
 
-          {/* Key Result */}
-          <Field label="Key Result">
-            {!courseSelected ? (
-              <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground opacity-50">Select course first</div>
-            ) : (
-              <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2">
-                {keyResults.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-muted-foreground italic">No key results available</div>
-                ) : keyResults.map((r, i) => (
-                  <label key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer transition-all ${form.key_result === r ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted'}`}>
-                    <input type="radio" name="key_result" checked={form.key_result === r} onChange={() => set('key_result', r)} className="hidden" />
-                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 mt-0.5 ${form.key_result === r ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
-                    <span className="text-sm text-foreground leading-relaxed">{r}</span>
-                  </label>
-                ))}
+              <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-secondary/50 text-xs text-muted-foreground">
+                      <tr className="text-left">
+                        <th className="px-4 py-3 font-medium">Date & Time</th>
+                        <th className="px-4 py-3 font-medium">Class Name</th>
+                        <th className="px-4 py-3 font-medium">Course</th>
+                        <th className="px-4 py-3 font-medium">Type</th>
+                        <th className="px-4 py-3 font-medium">Tutor</th>
+                        <th className="px-4 py-3 font-medium text-center">Kids</th>
+                        <th className="px-4 py-3 font-medium text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {lesson1Records.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">
+                            No Lesson 1 classes found for this filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        lesson1Records.map((r) => (
+                          <tr key={r.id || r.unique_key} className="hover:bg-secondary/30">
+                            <td className="px-4 py-3 text-xs whitespace-nowrap text-foreground">
+                              {r.lesson_date} · {r.lesson_time}
+                            </td>
+                            <td className="px-4 py-3 font-medium text-foreground">{r.group_title}</td>
+                            <td className="px-4 py-3 text-xs text-muted-foreground">{r.course}</td>
+                            <td className="px-4 py-3 text-xs">{r.group_type}</td>
+                            <td className="px-4 py-3 text-xs text-foreground">{r.lesson_teacher || '-'}</td>
+                            <td className="px-4 py-3 text-center font-medium text-primary">
+                              {Math.max(r.students_count || 0, r.students_attended || 0)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-xs">
+                              {r.is_conducted ? (
+                                <span className="px-2 py-0.5 rounded-full bg-chart-3/15 text-chart-3 font-medium">
+                                  Conducted ({r.attendance_pct}%)
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">
+                                  Scheduled / 0%
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            )}
-          </Field>
+            </div>
+          )}
 
-          {/* New Skills */}
-          <Field label="Abilities / Skills Acquired">
-            {!courseSelected ? (
-              <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground opacity-50">Select course first</div>
-            ) : (
-              <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2">
-                {newSkillsList.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-muted-foreground italic">No skills available</div>
-                ) : newSkillsList.map((s, i) => (
-                  <label key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer transition-all ${form.new_skills === s ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted'}`}>
-                    <input type="radio" name="new_skills" checked={form.new_skills === s} onChange={() => set('new_skills', s)} className="hidden" />
-                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 mt-0.5 ${form.new_skills === s ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
-                    <span className="text-sm text-foreground leading-relaxed">{s}</span>
-                  </label>
-                ))}
+          {activeTab === 'raw' && (
+            <div className="space-y-4">
+              <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-secondary/50 text-muted-foreground">
+                      <tr className="text-left">
+                        <th className="px-3 py-3 font-medium">Date & Time</th>
+                        <th className="px-3 py-3 font-medium">Week</th>
+                        <th className="px-3 py-3 font-medium">Lesson</th>
+                        <th className="px-3 py-3 font-medium">Group Title</th>
+                        <th className="px-3 py-3 font-medium">Course</th>
+                        <th className="px-3 py-3 font-medium">Tutor</th>
+                        <th className="px-3 py-3 font-medium text-center">Att %</th>
+                        <th className="px-3 py-3 font-medium text-center">Attended</th>
+                        <th className="px-3 py-3 font-medium text-right">Flag</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {paginatedRaw.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-10 text-center text-muted-foreground">
+                            No schedules found.
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedRaw.map((r) => {
+                          const isMultiple4 = !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0;
+                          return (
+                            <tr key={r.id || r.unique_key} className="hover:bg-secondary/30">
+                              <td className="px-3 py-2.5 whitespace-nowrap text-foreground">
+                                {r.lesson_date} {r.lesson_time}
+                              </td>
+                              <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{r.week_label}</td>
+                              <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-primary">
+                                L{r.lesson_number}
+                              </td>
+                              <td className="px-3 py-2.5 font-medium text-foreground">{r.group_title}</td>
+                              <td className="px-3 py-2.5 text-muted-foreground max-w-[200px] truncate" title={r.course}>
+                                {r.course}
+                              </td>
+                              <td className="px-3 py-2.5 whitespace-nowrap text-foreground">
+                                {r.lesson_teacher || '-'}
+                              </td>
+                              <td className="px-3 py-2.5 text-center font-medium">{r.attendance_pct}%</td>
+                              <td className="px-3 py-2.5 text-center">{r.students_attended}</td>
+                              <td className="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+                                {isMultiple4 && (
+                                  <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium">
+                                    Weekly Report (L{r.lesson_number})
+                                  </span>
+                                )}
+                                {r.is_conducted ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-chart-3/15 text-chart-3">
+                                    Conducted
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">
+                                    {r.is_test_group ? 'Test' : '0%'}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            )}
-          </Field>
 
-          {/* Presence */}
-          <PerformancePointPicker
-            label="Presence *"
-            aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('presence'))}
-            value={form.presence}
-            onChange={v => set('presence', v)}
-          />
+              {totalPages > 1 && (
+                <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+              )}
+            </div>
+          )}
+        </>
+      )}
 
-          {/* Involvement and Difficulty */}
-          <PerformancePointPicker
-            label="Involvement and Difficulty *"
-            aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('involvement'))}
-            value={form.involvement_difficulty}
-            onChange={v => set('involvement_difficulty', v)}
-          />
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="bg-card border-border max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-foreground">
+              <Upload className="w-5 h-5 text-primary" /> Import BO LMS Schedule
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Upload a CSV or Excel file exported from BO LMS. Data will be automatically summarized on the dashboard.
+            </p>
+          </DialogHeader>
 
-          {/* Task Completion */}
-          <PerformancePointPicker
-            label="Task Completion *"
-            aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('task'))}
-            value={form.task_completion}
-            onChange={v => set('task_completion', v)}
-          />
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground/80 block">
+                BO Schedule File (.csv / .xlsx)
+              </label>
+              <Input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                className="cursor-pointer"
+              />
+              {importFile && (
+                <p className="text-xs text-chart-3 flex items-center gap-1 mt-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {importFile.name}
+                </p>
+              )}
+            </div>
 
-          {/* Tutor's Note */}
-          <Field label="Tutor's Note">
-            <textarea
-              value={form.tutor_note || ''}
-              onChange={e => {
-                const words = e.target.value.trim() === '' ? [] : e.target.value.trim().split(/\s+/);
-                if (words.length <= 200) set('tutor_note', e.target.value);
-              }}
-              placeholder="Write tutor's notes here..."
-              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground resize-none"
-              style={{ minHeight: '80px', height: 'auto' }}
-              onInput={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
-              rows={3}
-            />
-            <div className="flex justify-between items-center mt-1">
-              <p className="text-xs text-muted-foreground">Maximum 200 words allowed.</p>
-              <p className={`text-xs font-medium ${
-                (form.tutor_note?.trim() === '' || !form.tutor_note ? 0 : form.tutor_note.trim().split(/\s+/).length) >= 190
-                  ? 'text-destructive'
-                  : 'text-muted-foreground'
-              }`}>
-                {form.tutor_note?.trim() === '' || !form.tutor_note ? 0 : form.tutor_note.trim().split(/\s+/).length} / 200 words
+            <div className="bg-secondary/40 border border-border rounded-xl p-3.5 space-y-2">
+              <label className="text-xs font-semibold text-foreground block">
+                Start Auto-Assign Weekly Report (Lesson 4, 8, 12, ...)
+              </label>
+              <Input
+                type="date"
+                value={cutoffDate}
+                onChange={(e) => setCutoffDate(e.target.value)}
+                className="bg-card"
+              />
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Every 4th-lesson schedules <strong>before this date</strong> will only be recorded in the dashboard summary and will{' '}
+                <strong>not</strong> generate tutor tasks. Schedules from this date onward will automatically appear in each tutor&apos;s{' '}
+                <strong>My Assigned Tasks</strong> with the corresponding class name.
               </p>
             </div>
-          </Field>
 
-          {/* Section Action / Submit Button */}
-          <div className="flex flex-col items-end gap-2 pt-2 pb-4">
-            {!requiredComplete && (
-              <p className="text-xs text-amber-400 text-right font-medium">
-                ⚠️ Please complete all required fields (*) such as Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task.
-              </p>
-            )}
-            <div className="flex justify-end gap-3 w-full sm:w-auto">
-              <Button 
-                type="button" 
-                variant="outline" 
-                onClick={() => onOpenChange(false)} 
-                className="border-border flex-1 sm:flex-initial"
-              >
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setImportOpen(false)}>
                 Cancel
               </Button>
-              <Button 
-                type="button"
-                onClick={handleSubmitClick} 
-                disabled={saving} 
-                className={`flex-1 sm:flex-initial font-semibold transition-all ${
-                  requiredComplete ? 'bg-primary hover:bg-primary/90 text-white' : 'bg-muted-foreground/30 text-muted-foreground cursor-pointer'
-                }`}
-              >
-                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editing ? 'Update' : 'Create'}
+              <Button onClick={handleImportSubmit} disabled={importing} className="bg-primary hover:bg-primary/90 gap-2">
+                {importing && <Loader2 className="w-4 h-4 animate-spin" />}
+                Import & Process Data
               </Button>
             </div>
           </div>
-
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="text-sm text-foreground/80">{label}</Label>
-      {children}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
