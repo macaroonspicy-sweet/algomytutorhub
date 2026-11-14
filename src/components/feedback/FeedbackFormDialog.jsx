@@ -1,528 +1,753 @@
-import React, { useEffect, useMemo, useState } from 'react';
+const db = globalThis.__B44_DB__ || { 
+  auth: { isAuthenticated: async () => false, me: async () => null }, 
+  entities: new Proxy({}, { 
+    get: () => ({ 
+      filter: async () => [], 
+      get: async () => null, 
+      create: async () => ({}), 
+      update: async () => ({}), 
+      delete: async () => ({}) 
+    }) 
+  }), 
+  integrations: { Core: { UploadFile: async () => ({ file_url: '' }) } } 
+};
+
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import { useAppAuth } from '@/lib/AppAuthContext';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Loader2, UserCheck, ArrowRight, CheckCircle2, Sparkles } from 'lucide-react';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Loader2, Users, User, CheckCircle2, Sparkles, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
+import StarPointInput from './StarPointInput';
+import PerformancePointPicker from './PerformancePointPicker';
+import { useAppAuth } from '@/lib/AppAuthContext';
 
-const MONTHS = [
-  { value: 1, label: 'January' },
-  { value: 2, label: 'February' },
-  { value: 3, label: 'March' },
-  { value: 4, label: 'April' },
-  { value: 5, label: 'May' },
-  { value: 6, label: 'June' },
-  { value: 7, label: 'July' },
-  { value: 8, label: 'August' },
-  { value: 9, label: 'September' },
-  { value: 10, label: 'October' },
-  { value: 11, label: 'November' },
-  { value: 12, label: 'December' },
-];
+const TODAY = new Date().toISOString().split('T')[0];
 
-export default function FeedbackFormDialog({
-  open,
-  isOpen,
-  onOpenChange,
-  onClose,
-  assignment,
-  prefill,
-  initialData,
-  record,
-  courses: propCourses = [],
-  modules: propModules = [],
-  onSaved,
-  onSuccess,
-}) {
+const EMPTY_FORM = {
+  student_name: '',
+  course_category_id: '',
+  course_name: '',
+  month: '',
+  class_code: '',
+  tutor_id: '',
+  tutor_name: '',
+  tutor_photo: '',
+  tutor_telegram: '',
+  point: 0,
+  project_link: '',
+  module_topic: '',
+  key_result: '',
+  new_skills: '',
+  presence: '',
+  involvement_difficulty: '',
+  task_completion: '',
+  tutor_note: '',
+  record_date: TODAY,
+  record_month: new Date().getMonth() + 1,
+  record_year: new Date().getFullYear(),
+};
+
+export default function FeedbackFormDialog({ open, onOpenChange, editing, processTask, onSaved }) {
   const { currentUser } = useAppAuth();
-  const dialogOpen = Boolean(open ?? isOpen);
-
-  const handleClose = (val) => {
-    if (!val) {
-      onOpenChange?.(false);
-      onClose?.();
-    } else {
-      onOpenChange?.(true);
-    }
-  };
-
-  const contextData = assignment || prefill || initialData || record || null;
-
-  const [courses, setCourses] = useState(propCourses);
-  const [modules, setModules] = useState(propModules);
-  const [rosterStudents, setRosterStudents] = useState([]);
-  const [completedStudents, setCompletedStudents] = useState([]);
+  const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  const [studentName, setStudentName] = useState('');
-  const [className, setClassName] = useState('');
-  const [courseName, setCourseName] = useState('');
-  const [moduleName, setModuleName] = useState('');
-  const [lessonTopic, setLessonTopic] = useState('');
-  const [periodMonth, setPeriodMonth] = useState(new Date().getMonth() + 1);
-  const [periodYear, setPeriodYear] = useState(new Date().getFullYear());
-  const [point, setPoint] = useState('5');
-  const [feedbackText, setFeedbackText] = useState('');
+  // Master data
+  const [tutors, setTutors] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [modules, setModules] = useState([]);
+  const [perfCategories, setPerfCategories] = useState([]);
+  const [allFeedbackRecords, setAllFeedbackRecords] = useState([]);
 
-  // Load courses & modules if not passed via props
+  // Phase 2: Group progress & Smart Roster state
+  const [sessionDoneCount, setSessionDoneCount] = useState(0);
+  const [evaluatedNamesInSession, setEvaluatedNamesInSession] = useState([]);
+
   useEffect(() => {
-    if (!dialogOpen) return;
-    async function loadRefs() {
-      if (!propCourses?.length) {
-        const { data: cData } = await supabase
-          .from('CourseCategory')
-          .select('*')
-          .order('name', { ascending: true });
-        if (cData) setCourses(cData);
-      }
-      if (!propModules?.length) {
-        const { data: mData } = await supabase
-          .from('ModuleCategory')
-          .select('*')
-          .order('order_index', { ascending: true });
-        if (mData) setModules(mData);
-      }
-    }
-    loadRefs();
-  }, [dialogOpen, propCourses, propModules]);
+    Promise.all([
+      db.entities.CustomUser.list(),
+      db.entities.CourseCategory.list(),
+      db.entities.ModuleCategory.list(),
+      db.entities.StudentPerformanceCategory.list(),
+      db.entities.FeedbackRecord.list(),
+    ]).then(([users, cats, mods, perfs, fbRecs]) => {
+      setTutors(users.filter(u => u.role === 'Tutor' || u.role === 'Team Leader'));
+      setCourses(cats.filter(c => c.is_active !== false));
+      setModules(mods);
+      setPerfCategories(perfs.filter(p => p.is_active !== false));
+      setAllFeedbackRecords(fbRecs || []);
+    });
+  }, []);
 
-  // Auto-fill Class, Course, Month & Smart Roster when dialog opens
+  // Refresh feedback records each time dialog opens so Smart Roster stays accurate
   useEffect(() => {
-    if (!dialogOpen) return;
+    if (open) {
+      db.entities.FeedbackRecord.list()
+        .then((recs) => setAllFeedbackRecords(recs || []))
+        .catch(() => {});
+    }
+  }, [open]);
 
-    const targetClass =
-      contextData?.class_name ||
-      contextData?.linked_class_name ||
-      contextData?.group_title ||
-      '';
-    const targetCourse =
-      contextData?.course_name ||
-      contextData?.course ||
-      '';
+  // Helper to match course name from processTask against master courses
+  const resolveMatchedCourse = (rawCourseName, classCodeStr) => {
+    if (!courses.length) return rawCourseName || '';
+    const target = (rawCourseName || '').toLowerCase().trim();
+    if (target) {
+      const exact = courses.find(c => c.name?.toLowerCase().trim() === target);
+      if (exact) return exact.name;
+      const partial = courses.find(
+        c => target.includes(c.name?.toLowerCase().trim()) || c.name?.toLowerCase().trim().includes(target)
+      );
+      if (partial) return partial.name;
+    }
+    // Fallback inference from class code abbreviations (e.g. VP, PS, PP, GD, WD, RB)
+    const code = (classCodeStr || '').toUpperCase();
+    if (/\bVP\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('visual'))?.name || '';
+    if (/\bPS\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('python start'))?.name || '';
+    if (/\bPP\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('python pro'))?.name || '';
+    if (/\bGD\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('graphic'))?.name || '';
+    if (/\bWD\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('web'))?.name || '';
+    if (/\bRB\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('roblox'))?.name || '';
+    return '';
+  };
 
-    let targetMonth = new Date().getMonth() + 1;
-    let targetYear = new Date().getFullYear();
+  // Helper to infer month period from notes like "Lesson 4", "Lesson 8", "Lesson 12"
+  const inferMonthFromNotes = (notesStr) => {
+    if (!notesStr) return '';
+    const match = String(notesStr).match(/lesson\s*(\d+)/i);
+    if (!match) return '';
+    const lessonNum = parseInt(match[1], 10);
+    if (!isNaN(lessonNum) && lessonNum >= 4) {
+      return Math.ceil(lessonNum / 4);
+    }
+    return '';
+  };
 
-    if (contextData?.period_month) {
-      targetMonth = Number(contextData.period_month);
-    } else if (contextData?.week_start_date) {
-      const d = new Date(contextData.week_start_date);
-      if (!isNaN(d.getTime())) {
-        targetMonth = d.getMonth() + 1;
-        targetYear = d.getFullYear();
+  useEffect(() => {
+    if (!open) return;
+
+    if (editing) {
+      const norm = { ...EMPTY_FORM, ...editing };
+      if (norm.course_name && norm.course_category_id !== norm.course_name) {
+        norm.course_category_id = norm.course_name;
       }
+      setForm(norm);
+      setSessionDoneCount(0);
+      setEvaluatedNamesInSession([]);
+    } else if (processTask) {
+      const resolvedClassCode = processTask.class_code || processTask.class_name || '';
+      const matchedCourse = resolveMatchedCourse(processTask.course_name, resolvedClassCode);
+      const inferredMonth = inferMonthFromNotes(processTask.notes);
+
+      let autoTopic = '';
+      let autoKeyResult = '';
+      let autoNewSkills = '';
+
+      if (matchedCourse && inferredMonth) {
+        const mod = modules.find(
+          m => m.course_name === matchedCourse && Number(m.month) === Number(inferredMonth)
+        );
+        if (mod) {
+          autoTopic = mod.module_topic || '';
+          autoKeyResult = mod.key_result || '';
+          autoNewSkills = mod.new_skills || '';
+        }
+      }
+
+      setForm({
+        ...EMPTY_FORM,
+        class_code: resolvedClassCode,
+        course_category_id: matchedCourse,
+        course_name: matchedCourse,
+        month: inferredMonth || '',
+        module_topic: autoTopic,
+        key_result: autoKeyResult,
+        new_skills: autoNewSkills,
+        tutor_id: currentUser?.id || processTask.tutor_id || '',
+        tutor_name: currentUser?.full_name || processTask.tutor_name || '',
+        tutor_photo: currentUser?.photo_url || '',
+        tutor_telegram: currentUser?.telegram_account || '',
+      });
+      setSessionDoneCount(Number(processTask.completed_count) || 0);
+      setEvaluatedNamesInSession([]);
+    } else {
+      // Standard "+ Add Feedback" mode
+      setForm({
+        ...EMPTY_FORM,
+        tutor_id: currentUser?.id || '',
+        tutor_name: currentUser?.full_name || '',
+        tutor_photo: currentUser?.photo_url || '',
+        tutor_telegram: currentUser?.telegram_account || '',
+      });
+      setSessionDoneCount(0);
+      setEvaluatedNamesInSession([]);
     }
+  }, [open, editing, processTask, currentUser, courses, modules]);
 
-    if (contextData?.period_year) {
-      targetYear = Number(contextData.period_year);
-    }
+  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
-    setClassName(targetClass);
-    setCourseName(targetCourse);
-    setPeriodMonth(targetMonth);
-    setPeriodYear(targetYear);
-    setStudentName(contextData?.student_name || '');
-    setModuleName(contextData?.module_name || '');
-    setLessonTopic(contextData?.lesson_topic || contextData?.notes || '');
-    setPoint(String(contextData?.point || '5'));
-    setFeedbackText(contextData?.feedback || contextData?.notes_detail || '');
+  const handleCourseChange = (courseName) => {
+    setForm(f => ({
+      ...f,
+      course_category_id: courseName,
+      course_name: courseName,
+      month: '',
+      module_topic: '',
+      key_result: '',
+      new_skills: '',
+    }));
+  };
 
-    // Smart Roster: fetch previous students in this class
-    async function loadSmartRoster() {
-      if (!targetClass) {
-        setRosterStudents([]);
-        setCompletedStudents([]);
+  const handleTutorChange = (id) => {
+    const t = tutors.find(u => u.id === id);
+    if (t) setForm(f => ({ ...f, tutor_id: id, tutor_name: t.full_name, tutor_photo: t.photo_url || '', tutor_telegram: t.telegram_account || '' }));
+  };
+
+  // Filtered modules based on selected course
+  const courseModules = modules.filter(m => m.course_name === form.course_category_id);
+  const availableMonths = [...new Set(courseModules.map(m => m.month).filter(Boolean))].sort((a, b) => a - b);
+  const moduleTopics = [...new Set(courseModules.map(m => m.module_topic).filter(Boolean))];
+  const keyResults = [...new Set(courseModules.map(m => m.key_result).filter(Boolean))];
+  const newSkillsList = [...new Set(courseModules.map(m => m.new_skills).filter(Boolean))];
+
+  const handleMonthChange = (monthNum) => {
+    const mod = courseModules.find(m => Number(m.month) === Number(monthNum));
+    setForm(f => ({
+      ...f,
+      month: monthNum,
+      module_topic: mod?.module_topic || '',
+      key_result: mod?.key_result || '',
+      new_skills: mod?.new_skills || '',
+    }));
+  };
+
+  // Smart Roster: historical students in this class_code + evaluation status for this task
+  const smartRoster = useMemo(() => {
+    const code = (form.class_code || '').toLowerCase().trim();
+    if (!code) return [];
+
+    const matchingRecords = allFeedbackRecords.filter(
+      r => (r.class_code || '').toLowerCase().trim() === code && r.student_name?.trim()
+    );
+
+    const uniqueMap = new Map();
+    matchingRecords.forEach((r) => {
+      const rawName = r.student_name.trim();
+      const key = rawName.toLowerCase();
+      const isDoneForThisTask =
+        (processTask?.id && String(r.task_id) === String(processTask.id)) ||
+        evaluatedNamesInSession.includes(key);
+
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, { name: rawName, done: isDoneForThisTask });
+      } else if (isDoneForThisTask) {
+        uniqueMap.get(key).done = true;
+      }
+    });
+
+    // Also include any student just saved in this session even if not in history yet
+    evaluatedNamesInSession.forEach((key) => {
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, {
+          name: key.replace(/\b\w/g, (l) => l.toUpperCase()),
+          done: true,
+        });
+      }
+    });
+
+    return Array.from(uniqueMap.values());
+  }, [allFeedbackRecords, form.class_code, processTask?.id, evaluatedNamesInSession]);
+
+  const courseSelected = !!form.course_category_id;
+
+  const requiredComplete =
+    !!form.student_name?.trim() &&
+    !!form.course_category_id &&
+    !!form.month &&
+    !!form.class_code?.trim() &&
+    !!form.tutor_id &&
+    Number(form.point) > 0 &&
+    !!form.presence &&
+    !!form.involvement_difficulty &&
+    !!form.task_completion;
+
+  const totalTargetStudents = processTask ? Math.max(Number(processTask.student_count) || 1, 1) : 1;
+  const remainingStudentsAfterThis = processTask
+    ? Math.max(totalTargetStudents - (sessionDoneCount + 1), 0)
+    : 0;
+
+  const handleSave = async (keepOpenForNext = false) => {
+    setSaving(true);
+    const dateParts = (form.record_date || TODAY).split('-');
+    const studentName = form.student_name.trim() || 'Student';
+
+    const bakePerf = (val) => {
+      if (!val || !val.includes('::')) return val;
+      const parts = val.split('::');
+      const aspectKey = parts[0];
+      const pointNum = parseInt(parts[1]);
+      const aspect = perfCategories.find(a => a.aspect_title === aspectKey || a.id === aspectKey);
+      const template = aspect?.[`point_${pointNum}_description`];
+      if (!template) return val;
+      const baked = template.replace(/\(Student Name\)/gi, studentName).replace(/\[Student Name\]/gi, studentName);
+      return `${aspect.aspect_title}::${pointNum}::${baked}`;
+    };
+
+    const saveForm = {
+      ...form,
+      student_name: studentName,
+      presence: bakePerf(form.presence),
+      involvement_difficulty: bakePerf(form.involvement_difficulty),
+      task_completion: bakePerf(form.task_completion),
+      record_month: dateParts[1] ? parseInt(dateParts[1]) : new Date().getMonth() + 1,
+      record_year: dateParts[0] ? parseInt(dateParts[0]) : new Date().getFullYear(),
+      ...(processTask?.id ? { task_id: String(processTask.id) } : {}),
+      ...(editing ? {} : {
+        created_by_name: currentUser?.full_name || '',
+        created_by_role: currentUser?.role || '',
+      }),
+    };
+
+    try {
+      if (editing) {
+        await db.entities.FeedbackRecord.update(editing.id, saveForm);
+        setSaving(false);
+        onSaved();
         return;
       }
 
-      const { data: pastRecords } = await supabase
-        .from('FeedbackRecord')
-        .select('student_name, period_month, period_year')
-        .ilike('class_name', targetClass.trim());
+      const created = await db.entities.FeedbackRecord.create(saveForm);
 
-      const uniqueNames = Array.from(
-        new Set((pastRecords || []).map((r) => r.student_name?.trim()).filter(Boolean))
-      );
-
-      const doneThisMonth = (pastRecords || [])
-        .filter(
-          (r) =>
-            Number(r.period_month) === Number(targetMonth) &&
-            Number(r.period_year) === Number(targetYear)
-        )
-        .map((r) => r.student_name?.trim().toLowerCase());
-
-      setRosterStudents(uniqueNames);
-      setCompletedStudents(doneThisMonth);
-
-      // Auto-select first uncompleted student if available
-      if (!contextData?.student_name && uniqueNames.length > 0) {
-        const nextStudent =
-          uniqueNames.find((n) => !doneThisMonth.includes(n.toLowerCase())) || uniqueNames[0];
-        setStudentName(nextStudent);
-      }
-    }
-
-    loadSmartRoster();
-  }, [dialogOpen, contextData]);
-
-  // Auto-suggest module based on selected course & lesson number
-  const filteredModules = useMemo(() => {
-    if (!courseName) return modules;
-    const matched = modules.filter(
-      (m) =>
-        m.course_name?.toLowerCase().includes(courseName.toLowerCase()) ||
-        courseName.toLowerCase().includes(m.course_name?.toLowerCase() || '___')
-    );
-    return matched.length > 0 ? matched : modules;
-  }, [modules, courseName]);
-
-  useEffect(() => {
-    if (!dialogOpen || !filteredModules.length || moduleName) return;
-    const lessonMatch = String(contextData?.notes || '').match(/Lesson\s*(\d+)/i);
-    if (lessonMatch) {
-      const lessonNum = parseInt(lessonMatch[1], 10);
-      const moduleIdx = Math.max(0, Math.min(filteredModules.length - 1, Math.ceil(lessonNum / 4) - 1));
-      if (filteredModules[moduleIdx]?.name) {
-        setModuleName(filteredModules[moduleIdx].name);
-      }
-    }
-  }, [dialogOpen, filteredModules, contextData, moduleName]);
-
-  const totalTargetStudents = Math.max(Number(contextData?.student_count) || 1, 1);
-  const currentCompletedCount = Number(contextData?.completed_count) || 0;
-  const isGroupClass = totalTargetStudents > 1;
-
-  const saveRecord = async (keepOpenForNext = false) => {
-    if (!studentName.trim()) {
-      toast.error('Please enter or select the student name');
-      return;
-    }
-    if (!className.trim()) {
-      toast.error('Class name is required');
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const now = new Date().toISOString();
-      const payload = {
-        tutor_id: currentUser?.id || contextData?.tutor_id || null,
-        tutor_name: currentUser?.full_name || contextData?.tutor_name || '',
-        student_name: studentName.trim(),
-        class_name: className.trim(),
-        course_name: courseName.trim(),
-        module_name: moduleName.trim(),
-        lesson_topic: lessonTopic.trim(),
-        period_month: Number(periodMonth),
-        period_year: Number(periodYear),
-        point: Number(point) || 5,
-        feedback: feedbackText.trim(),
-        updated_date: now,
-      };
-
-      if (record?.id) {
-        const { error } = await supabase
-          .from('FeedbackRecord')
-          .update(payload)
-          .eq('id', record.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from('FeedbackRecord')
-          .insert([{ ...payload, created_date: now }]);
-        if (error) throw error;
+      // Send notifications (existing behavior)
+      if (currentUser?.role === 'Tutor' || currentUser?.role === 'Team Leader') {
+        const admins = await db.entities.CustomUser.filter({ is_active: true });
+        const adminUsers = admins.filter(u => ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team'].includes(u.role));
+        await Promise.all(adminUsers.map(admin =>
+          db.entities.Notification.create({
+            recipient_id: admin.id,
+            type: 'feedback_created',
+            title: 'New Student Feedback',
+            message: `${currentUser.full_name} submitted feedback for student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
+            reference_id: created?.id || '',
+            is_read: false,
+          })
+        ));
+      } else if (saveForm.tutor_id) {
+        await db.entities.Notification.create({
+          recipient_id: saveForm.tutor_id,
+          type: 'feedback_created',
+          title: 'New Student Feedback',
+          message: `${currentUser?.full_name || 'Admin'} recorded feedback for your student "${saveForm.student_name}" (${saveForm.course_name || 'N/A'}, Month ${saveForm.month || '?'}).`,
+          reference_id: created?.id || '',
+          is_read: false,
+        });
       }
 
-      // Update WeeklyFeedbackAssignment progress if opened from My Student Feedback
-      if (assignment?.id) {
-        const newCompleted = Math.min(totalTargetStudents, currentCompletedCount + 1);
-        const isAllDone = newCompleted >= totalTargetStudents;
+      // If launched from Process button, update WeeklyFeedbackAssignment progress (x/n)
+      if (processTask) {
+        const newDoneCount = Math.min(sessionDoneCount + 1, totalTargetStudents);
+        const isAllDone = newDoneCount >= totalTargetStudents;
+        const actionAt = new Date().toISOString();
+        const actionBy = currentUser?.full_name || currentUser?.name || 'Tutor';
 
-        await supabase
+        let updateQuery = supabase
           .from('WeeklyFeedbackAssignment')
           .update({
-            completed_count: newCompleted,
+            completed_count: newDoneCount,
             status: isAllDone ? 'completed' : 'in_progress',
-            updated_date: now,
-          })
-          .eq('id', assignment.id);
+            is_done: isAllDone,
+            completed_by_name: isAllDone ? actionBy : null,
+            completed_at: isAllDone ? actionAt : null,
+            completed_date: isAllDone ? actionAt : null,
+            updated_date: actionAt,
+          });
+
+        if (processTask.id) {
+          updateQuery = updateQuery.eq('id', processTask.id);
+        } else {
+          if (processTask.class_name) updateQuery = updateQuery.eq('class_name', processTask.class_name);
+          if (processTask.week_start_date) updateQuery = updateQuery.eq('week_start_date', processTask.week_start_date);
+        }
+
+        const { error: taskUpdateErr } = await updateQuery;
+        if (taskUpdateErr) {
+          console.error('Failed to update WeeklyFeedbackAssignment progress:', taskUpdateErr.message);
+        }
+
+        if (keepOpenForNext && !isAllDone) {
+          setSessionDoneCount(newDoneCount);
+          setEvaluatedNamesInSession((prev) => [...new Set([...prev, studentName.toLowerCase()])]);
+          setAllFeedbackRecords((prev) => [saveForm, ...prev]);
+
+          // Reset only student-specific fields, keep class/course/month/module info
+          setForm((prev) => ({
+            ...prev,
+            student_name: '',
+            point: 0,
+            project_link: '',
+            presence: '',
+            involvement_difficulty: '',
+            task_completion: '',
+            tutor_note: '',
+          }));
+
+          toast.success(`Saved ${studentName}! (${newDoneCount}/${totalTargetStudents} done)`, {
+            description: 'Course & module kept. Enter the next student below.',
+          });
+          setSaving(false);
+          return;
+        }
       }
 
-      toast.success(`Feedback saved for ${studentName.trim()}!`);
-      onSaved?.();
-      onSuccess?.();
-
-      if (keepOpenForNext) {
-        const updatedDone = [...completedStudents, studentName.trim().toLowerCase()];
-        setCompletedStudents(updatedDone);
-        const nextRemaining = rosterStudents.find(
-          (n) => !updatedDone.includes(n.toLowerCase())
-        );
-        setStudentName(nextRemaining || '');
-        setFeedbackText('');
-      } else {
-        handleClose(false);
-      }
+      setSaving(false);
+      onSaved();
     } catch (err) {
-      toast.error('Failed to save feedback', { description: err.message });
-    } finally {
+      console.error('Error saving feedback:', err);
+      toast.error('Failed to save feedback: ' + (err.message || 'An unexpected error occurred'));
       setSaving(false);
     }
   };
 
+  // Custom submit button click handler for mobile / touch screen devices
+  const handleSubmitClick = (e, keepOpenForNext = false) => {
+    e.preventDefault();
+    if (!requiredComplete) {
+      toast.error('Incomplete Form', {
+        description: 'Please ensure Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task Completion are filled in.',
+      });
+      return;
+    }
+    handleSave(keepOpenForNext);
+  };
+
+  const isTutorRole = ['Tutor', 'Team Leader'].includes(currentUser?.role);
+
   return (
-    <Dialog open={dialogOpen} onOpenChange={handleClose}>
-      <DialogContent className="bg-card border-border max-w-xl max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-card border-border max-w-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-foreground flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-primary" />
-            {record?.id ? 'Edit Student Feedback' : 'Submit Student Feedback'}
+          <DialogTitle>
+            {editing ? 'Edit Feedback' : processTask ? 'Process Weekly Class Feedback' : 'Add Student Feedback'}
           </DialogTitle>
-          {assignment && (
-            <p className="text-xs text-muted-foreground">
-              {assignment.class_name} · Progress: {currentCompletedCount}/{totalTargetStudents} student(s)
-            </p>
-          )}
         </DialogHeader>
 
-        <div className="space-y-4 pt-1">
-          {/* Smart Roster Quick-Pick */}
-          {rosterStudents.length > 0 && (
-            <div className="bg-secondary/40 border border-border rounded-xl p-3 space-y-2">
-              <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5 text-primary" />
-                Smart Roster (Students in this class)
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {rosterStudents.map((name) => {
-                  const isDone = completedStudents.includes(name.toLowerCase());
-                  const isSelected = studentName.trim().toLowerCase() === name.toLowerCase();
-                  return (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => setStudentName(name)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors ${
-                        isSelected
-                          ? 'bg-primary text-primary-foreground'
-                          : isDone
-                          ? 'bg-chart-3/15 text-chart-3 border border-chart-3/30'
-                          : 'bg-card border border-border text-foreground hover:bg-secondary'
-                      }`}
-                    >
-                      {isDone && <CheckCircle2 className="w-3 h-3" />}
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Student Name *</label>
-              <Input
-                value={studentName}
-                onChange={(e) => setStudentName(e.target.value)}
-                placeholder="Enter student full name"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Class Name *</label>
-              <Input
-                value={className}
-                onChange={(e) => setClassName(e.target.value)}
-                placeholder="e.g. MY 1-1 GDJ 058"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Course</label>
-              {courses.length > 0 ? (
-                <Select value={courseName} onValueChange={setCourseName}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select course" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {courseName && !courses.some((c) => c.name === courseName) && (
-                      <SelectItem value={courseName}>{courseName}</SelectItem>
-                    )}
-                    {courses.map((c) => (
-                      <SelectItem key={c.id || c.name} value={c.name}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  value={courseName}
-                  onChange={(e) => setCourseName(e.target.value)}
-                  placeholder="Course name"
-                />
-              )}
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Module / Unit</label>
-              {filteredModules.length > 0 ? (
-                <Select value={moduleName} onValueChange={setModuleName}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select module" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {moduleName && !filteredModules.some((m) => m.name === moduleName) && (
-                      <SelectItem value={moduleName}>{moduleName}</SelectItem>
-                    )}
-                    {filteredModules.map((m) => (
-                      <SelectItem key={m.id || m.name} value={m.name}>
-                        {m.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  value={moduleName}
-                  onChange={(e) => setModuleName(e.target.value)}
-                  placeholder="Module name"
-                />
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Month</label>
-              <Select
-                value={String(periodMonth)}
-                onValueChange={(v) => setPeriodMonth(Number(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MONTHS.map((m) => (
-                    <SelectItem key={m.value} value={String(m.value)}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Year</label>
-              <Select
-                value={String(periodYear)}
-                onValueChange={(v) => setPeriodYear(Number(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2025">2025</SelectItem>
-                  <SelectItem value="2026">2026</SelectItem>
-                  <SelectItem value="2027">2027</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/80">Rating (1–5)</label>
-              <Select value={String(point)} onValueChange={setPoint}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="5">5 - Excellent</SelectItem>
-                  <SelectItem value="4">4 - Good</SelectItem>
-                  <SelectItem value="3">3 - Average</SelectItem>
-                  <SelectItem value="2">2 - Needs Help</SelectItem>
-                  <SelectItem value="1">1 - Poor</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-foreground/80">Lesson / Topic</label>
-            <Input
-              value={lessonTopic}
-              onChange={(e) => setLessonTopic(e.target.value)}
-              placeholder="e.g. Lesson 4 - Project Review"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-foreground/80">Student Progress & Feedback</label>
-            <textarea
-              rows={4}
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-              placeholder="Write student progress, strengths, and areas to improve..."
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-          </div>
-
-          <div className="flex flex-wrap justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => handleClose(false)}
-              disabled={saving}
-            >
-              Cancel
-            </Button>
-
-            {isGroupClass && currentCompletedCount + 1 < totalTargetStudents && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => saveRecord(true)}
-                disabled={saving}
-                className="gap-1.5"
-              >
-                {saving ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+        {/* Process Task Banner (shown when launched via Process button) */}
+        {processTask && (
+          <div className="bg-primary/10 border border-primary/25 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="space-y-0.5">
+              <div className="font-semibold text-foreground flex items-center gap-1.5">
+                {totalTargetStudents > 1 ? (
+                  <Users className="w-4 h-4 text-primary" />
                 ) : (
-                  <ArrowRight className="w-4 h-4" />
+                  <User className="w-4 h-4 text-primary" />
                 )}
-                Save & Next Student
-              </Button>
-            )}
-
-            <Button
-              type="button"
-              onClick={() => saveRecord(false)}
-              disabled={saving}
-              className="bg-primary hover:bg-primary/90 gap-1.5"
-            >
-              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-              Save Feedback
-            </Button>
+                <span>{processTask.class_name || processTask.class_code}</span>
+                <span className="px-2 py-0.5 rounded-full bg-background/80 border border-border text-[10px]">
+                  {totalTargetStudents > 1 ? `Group (${totalTargetStudents} Kids)` : 'Private (1 Kid)'}
+                </span>
+              </div>
+              {processTask.notes && (
+                <div className="text-muted-foreground">{processTask.notes}</div>
+              )}
+            </div>
+            <div className="text-right">
+              <span className="px-2.5 py-1 rounded-lg bg-primary text-primary-foreground font-semibold">
+                Progress: {sessionDoneCount} / {totalTargetStudents}
+              </span>
+            </div>
           </div>
+        )}
+
+        <div className="space-y-4 pt-2">
+
+          {/* Record Date */}
+          <Field label="Record Date">
+            <Input
+              type="date"
+              value={form.record_date || TODAY}
+              onChange={e => set('record_date', e.target.value)}
+              className="bg-muted border-border"
+            />
+          </Field>
+
+          {/* Student Name + Smart Roster Quick Picker */}
+          <Field label="Student Name *">
+            <Input 
+              value={form.student_name} 
+              onChange={e => set('student_name', e.target.value)} 
+              placeholder="Enter student name or pick from class roster below..." 
+              className="bg-muted border-border" 
+            />
+            {smartRoster.length > 0 && (
+              <div className="pt-1.5 space-y-1.5">
+                <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-chart-3" />
+                  <span>Smart Roster ({form.class_code}) — click to select student:</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {smartRoster.map((st) => {
+                    const isSelected = form.student_name.trim().toLowerCase() === st.name.toLowerCase();
+                    return (
+                      <button
+                        key={st.name}
+                        type="button"
+                        onClick={() => set('student_name', st.name)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border transition-all ${
+                          isSelected
+                            ? 'bg-primary text-primary-foreground border-primary font-medium'
+                            : st.done
+                            ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+                            : 'bg-secondary/60 text-foreground border-border hover:bg-secondary'
+                        }`}
+                      >
+                        {st.done && <CheckCircle2 className="w-3 h-3 text-emerald-500" />}
+                        <span>{st.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </Field>
+
+          {/* Course Name */}
+          <Field label="Course Name *">
+            <Select value={form.course_category_id} onValueChange={handleCourseChange}>
+              <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select course..." /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                {courses.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {/* Month */}
+          <Field label="Month *">
+            <Select value={form.month ? String(form.month) : ''} onValueChange={v => handleMonthChange(Number(v))} disabled={!courseSelected}>
+              <SelectTrigger className="bg-muted border-border disabled:opacity-50"><SelectValue placeholder={courseSelected ? 'Select month...' : 'Select course first'} /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                {availableMonths.map(m => <SelectItem key={m} value={String(m)}>Month {m}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {/* Class Code */}
+          <Field label="Class Code *">
+            <Input 
+              value={form.class_code} 
+              onChange={e => set('class_code', e.target.value)} 
+              placeholder="Enter class code..." 
+              className="bg-muted border-border" 
+            />
+          </Field>
+
+          {/* Tutor Name (Auto-filled & Locked for Tutor/Team Leader Roles) */}
+          <Field label="Tutor Name *">
+            {isTutorRole ? (
+              <Input
+                value={form.tutor_name || currentUser?.full_name || ''}
+                disabled
+                className="bg-muted/60 border-border font-medium text-foreground cursor-not-allowed opacity-80"
+              />
+            ) : (
+              <Select value={form.tutor_id} onValueChange={handleTutorChange}>
+                <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select tutor..." /></SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  {tutors.map(t => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+          </Field>
+
+          {/* Point */}
+          <Field label="Point (0 – 5) *">
+            <StarPointInput value={form.point} onChange={v => set('point', v)} />
+          </Field>
+
+          {/* Project Link */}
+          <Field label="Project (Link)">
+            <Input value={form.project_link} onChange={e => set('project_link', e.target.value)} placeholder="https://..." className="bg-muted border-border" />
+          </Field>
+
+          {/* Module Topic */}
+          <Field label="Module Topic">
+            {!courseSelected ? (
+              <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground opacity-50">Select course first</div>
+            ) : (
+              <div className="space-y-1.5">
+                {moduleTopics.length === 0 ? (
+                  <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground italic">No module topics available</div>
+                ) : (
+                  <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2">
+                    {moduleTopics.map((t, i) => (
+                      <label key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer transition-all ${form.module_topic === t ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted'}`}>
+                        <input type="radio" name="module_topic" checked={form.module_topic === t} onChange={() => set('module_topic', t)} className="hidden" />
+                        <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 mt-0.5 ${form.module_topic === t ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
+                        <span className="text-sm text-foreground leading-relaxed">{t}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </Field>
+
+          {/* Key Result */}
+          <Field label="Key Result">
+            {!courseSelected ? (
+              <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground opacity-50">Select course first</div>
+            ) : (
+              <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2">
+                {keyResults.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-muted-foreground italic">No key results available</div>
+                ) : keyResults.map((r, i) => (
+                  <label key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer transition-all ${form.key_result === r ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted'}`}>
+                    <input type="radio" name="key_result" checked={form.key_result === r} onChange={() => set('key_result', r)} className="hidden" />
+                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 mt-0.5 ${form.key_result === r ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
+                    <span className="text-sm text-foreground leading-relaxed">{r}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Field>
+
+          {/* New Skills */}
+          <Field label="Abilities / Skills Acquired">
+            {!courseSelected ? (
+              <div className="bg-muted border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground opacity-50">Select course first</div>
+            ) : (
+              <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-muted/30 p-2">
+                {newSkillsList.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-muted-foreground italic">No skills available</div>
+                ) : newSkillsList.map((s, i) => (
+                  <label key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer transition-all ${form.new_skills === s ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted'}`}>
+                    <input type="radio" name="new_skills" checked={form.new_skills === s} onChange={() => set('new_skills', s)} className="hidden" />
+                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 mt-0.5 ${form.new_skills === s ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
+                    <span className="text-sm text-foreground leading-relaxed">{s}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Field>
+
+          {/* Presence */}
+          <PerformancePointPicker
+            label="Presence *"
+            aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('presence'))}
+            value={form.presence}
+            onChange={v => set('presence', v)}
+          />
+
+          {/* Involvement and Difficulty */}
+          <PerformancePointPicker
+            label="Involvement and Difficulty *"
+            aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('involvement'))}
+            value={form.involvement_difficulty}
+            onChange={v => set('involvement_difficulty', v)}
+          />
+
+          {/* Task Completion */}
+          <PerformancePointPicker
+            label="Task Completion *"
+            aspect={perfCategories.find(p => p.aspect_title?.toLowerCase().includes('task'))}
+            value={form.task_completion}
+            onChange={v => set('task_completion', v)}
+          />
+
+          {/* Tutor's Note */}
+          <Field label="Tutor's Note">
+            <textarea
+              value={form.tutor_note || ''}
+              onChange={e => {
+                const words = e.target.value.trim() === '' ? [] : e.target.value.trim().split(/\s+/);
+                if (words.length <= 200) set('tutor_note', e.target.value);
+              }}
+              placeholder="Write tutor's notes here..."
+              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground resize-none"
+              style={{ minHeight: '80px', height: 'auto' }}
+              onInput={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+              rows={3}
+            />
+            <div className="flex justify-between items-center mt-1">
+              <p className="text-xs text-muted-foreground">Maximum 200 words allowed.</p>
+              <p className={`text-xs font-medium ${
+                (form.tutor_note?.trim() === '' || !form.tutor_note ? 0 : form.tutor_note.trim().split(/\s+/).length) >= 190
+                  ? 'text-destructive'
+                  : 'text-muted-foreground'
+              }`}>
+                {form.tutor_note?.trim() === '' || !form.tutor_note ? 0 : form.tutor_note.trim().split(/\s+/).length} / 200 words
+              </p>
+            </div>
+          </Field>
+
+          {/* Section Action / Submit Button */}
+          <div className="flex flex-col items-end gap-2 pt-2 pb-4">
+            {!requiredComplete && (
+              <p className="text-xs text-amber-400 text-right font-medium">
+                ⚠️ Please complete all required fields (*) such as Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task.
+              </p>
+            )}
+            <div className="flex flex-wrap justify-end gap-2.5 w-full sm:w-auto">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => onOpenChange(false)} 
+                className="border-border flex-1 sm:flex-initial"
+              >
+                Cancel
+              </Button>
+
+              {/* Show "Save & Next Student" if processing a Group class with remaining students */}
+              {processTask && !editing && remainingStudentsAfterThis > 0 && (
+                <Button
+                  type="button"
+                  onClick={(e) => handleSubmitClick(e, true)}
+                  disabled={saving}
+                  className={`flex-1 sm:flex-initial font-semibold gap-1.5 transition-all ${
+                    requiredComplete
+                      ? 'bg-chart-3 hover:bg-chart-3/90 text-white'
+                      : 'bg-muted-foreground/30 text-muted-foreground cursor-pointer'
+                  }`}
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                  Save & Next Student ({remainingStudentsAfterThis} left)
+                </Button>
+              )}
+
+              <Button 
+                type="button"
+                onClick={(e) => handleSubmitClick(e, false)} 
+                disabled={saving} 
+                className={`flex-1 sm:flex-initial font-semibold transition-all ${
+                  requiredComplete ? 'bg-primary hover:bg-primary/90 text-white' : 'bg-muted-foreground/30 text-muted-foreground cursor-pointer'
+                }`}
+              >
+                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {editing
+                  ? 'Update'
+                  : processTask
+                  ? remainingStudentsAfterThis === 0
+                    ? 'Save & Complete Class'
+                    : 'Save & Close'
+                  : 'Create'}
+              </Button>
+            </div>
+          </div>
+
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-sm text-foreground/80">{label}</Label>
+      {children}
+    </div>
   );
 }
