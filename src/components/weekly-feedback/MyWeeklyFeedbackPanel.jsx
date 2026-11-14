@@ -15,6 +15,22 @@ import { toast } from 'sonner';
 import { assignmentStatus, fmtDate } from '@/lib/workflowUtils';
 import FeedbackFormDialog from '@/components/feedback/FeedbackFormDialog';
 
+const resolveMonthFromItem = (item, existingRecordCount = 0) => {
+  if (item.month && String(item.month).trim()) {
+    return String(item.month).trim();
+  }
+  const lessonNum = Number(item.lesson_number);
+  if (lessonNum > 0) {
+    return `Month ${Math.ceil(lessonNum / 4)}`;
+  }
+  const textToScan = `${item.notes || ''} ${item.class_name || ''}`;
+  const match = textToScan.match(/lesson\s*#?\s*(\d+)/i);
+  if (match) {
+    return `Month ${Math.ceil(parseInt(match[1], 10) / 4)}`;
+  }
+  return `Month ${existingRecordCount + 1}`;
+};
+
 export default function MyWeeklyFeedbackPanel() {
   const { currentUser } = useAppAuth();
   const [assignments, setAssignments] = useState([]);
@@ -40,23 +56,41 @@ export default function MyWeeklyFeedbackPanel() {
     setLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from('WeeklyFeedbackAssignment')
-        .select('*')
-        .order('created_date', { ascending: false });
+      const [{ data, error }, { data: recordsData }] = await Promise.all([
+        supabase
+          .from('WeeklyFeedbackAssignment')
+          .select('*')
+          .order('created_date', { ascending: false }),
+        supabase
+          .from('FeedbackRecord')
+          .select('class_name, class_code, month'),
+      ]);
 
       if (error) throw error;
 
       if (data) {
-        const myData = data.filter((item) => {
-          const isMyId = item.tutor_id && String(item.tutor_id) === String(currentUser.id);
-          const isMyName =
-            item.tutor_name &&
-            item.tutor_name.toLowerCase().trim() ===
-              (currentUser.full_name || currentUser.name || '').toLowerCase().trim();
+        const pastRecords = recordsData || [];
+        const myData = data
+          .filter((item) => {
+            const isMyId = item.tutor_id && String(item.tutor_id) === String(currentUser.id);
+            const isMyName =
+              item.tutor_name &&
+              item.tutor_name.toLowerCase().trim() ===
+                (currentUser.full_name || currentUser.name || '').toLowerCase().trim();
 
-          return isMyId || isMyName;
-        });
+            return isMyId || isMyName;
+          })
+          .map((item) => {
+            const prevCount = pastRecords.filter(
+              (r) =>
+                (item.class_name && r.class_name === item.class_name) ||
+                (item.class_code && String(r.class_code) === String(item.class_code))
+            ).length;
+            return {
+              ...item,
+              month: resolveMonthFromItem(item, prevCount),
+            };
+          });
 
         setAssignments(myData);
       }
@@ -134,7 +168,7 @@ export default function MyWeeklyFeedbackPanel() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <MessageSquare className="w-5 h-5 text-chart-4" />
-            <h2 className="font-semibold text-foreground">My Student Feedback</h2>
+            <h2 className="font-semibold text-foreground">My Monthly Student Feedback</h2>
           </div>
           <div className="text-xs text-muted-foreground flex items-center gap-2">
             <span>
@@ -159,7 +193,7 @@ export default function MyWeeklyFeedbackPanel() {
           </div>
         ) : assignments.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            No weekly feedback assigned yet. Your assigned classes will appear here.
+            No monthly feedback assigned yet. Your assigned classes will appear here.
           </div>
         ) : (
           <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1">
@@ -187,6 +221,12 @@ export default function MyWeeklyFeedbackPanel() {
                       <span className="truncate">
                         {item.class_name || item.student_name || 'Class Assignment'}
                       </span>
+
+                      {item.month && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">
+                          {item.month}
+                        </span>
+                      )}
 
                       <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-background border border-border text-muted-foreground font-medium">
                         {isGroup ? (
@@ -228,7 +268,7 @@ export default function MyWeeklyFeedbackPanel() {
 
                     {item.week_start_date && (
                       <div className="text-[10px] text-muted-foreground">
-                        Week of {fmtDate(item.week_start_date)}
+                        Period of {fmtDate(item.week_start_date)}
                       </div>
                     )}
                   </div>
@@ -253,7 +293,7 @@ export default function MyWeeklyFeedbackPanel() {
                         onClick={() => handleUpdateStatus(item, idx, 'rescheduled')}
                         disabled={isRowBusy}
                         className="h-8 px-2.5 text-xs text-amber-600 hover:bg-amber-500/15 hover:text-amber-700 gap-1"
-                        title="Mark this week's feedback as rescheduled"
+                        title="Mark this feedback as rescheduled"
                       >
                         {busyAction === `${key}:rescheduled` ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />

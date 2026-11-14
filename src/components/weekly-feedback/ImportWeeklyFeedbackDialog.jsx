@@ -6,6 +6,34 @@ import { Button } from '@/components/ui/button';
 import { Loader2, Upload, FileSpreadsheet, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 
+const extractLessonAndMonth = (row) => {
+  const rawLesson =
+    row['Lesson'] ??
+    row['Lesson Number'] ??
+    row['lesson'] ??
+    row['lesson_number'] ??
+    '';
+
+  const rawMonth = String(row['Month'] ?? row['month'] ?? '').trim();
+  const rawNotes = String(row['Notes'] ?? row['notes'] ?? '').trim();
+
+  let lessonNum = parseInt(String(rawLesson).replace(/\D/g, ''), 10);
+  if ((!lessonNum || isNaN(lessonNum)) && rawNotes) {
+    const match = rawNotes.match(/lesson\s*#?\s*(\d+)/i);
+    if (match) lessonNum = parseInt(match[1], 10);
+  }
+
+  let computedMonth = rawMonth;
+  if (!computedMonth && lessonNum > 0) {
+    computedMonth = `Month ${Math.ceil(lessonNum / 4)}`;
+  }
+
+  return {
+    lesson_number: lessonNum > 0 ? lessonNum : null,
+    month: computedMonth || null,
+  };
+};
+
 export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImported }) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -26,7 +54,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
         const workbook = XLSX.read(data, { type: 'array' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        
+
         const rawJson = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
         if (!rawJson || rawJson.length === 0) {
@@ -35,23 +63,31 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
           return;
         }
 
-        const mappedData = rawJson.map((row) => {
-          const rawCode = row['Class Code'] || row['class_code'] || '';
-          // Tukar class_code ke integer jika nombor, atau set null jika string biasa
-          const parsedCode = !isNaN(rawCode) && rawCode !== '' ? parseInt(rawCode, 10) : null;
+        const mappedData = rawJson
+          .map((row) => {
+            const rawCode = row['Class Code'] || row['class_code'] || '';
+            const parsedCode = !isNaN(rawCode) && rawCode !== '' ? parseInt(rawCode, 10) : null;
+            const { lesson_number, month } = extractLessonAndMonth(row);
+            const rawNotes = String(row['Notes'] || row['notes'] || '').trim();
+            const finalNotes =
+              rawNotes || (lesson_number ? `Lesson ${lesson_number} (${month})` : '');
 
-          return {
-            class_code: parsedCode,
-            class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
-            course_name: String(row['Course Name'] || row['course_name'] || '').trim(),
-            tutor_name: String(row['Tutor Name'] || row['tutor_name'] || '').trim(),
-            tutor_id: String(row['Tutor ID'] || row['tutor_id'] || '').trim(),
-            week_start_date: String(row['Week Start'] || row['week_start_date'] || '').trim(),
-            week_end_date: String(row['Week End'] || row['week_end_date'] || '').trim(),
-            status: String(row['Status'] || row['status'] || 'pending').toLowerCase().trim(),
-            notes: String(row['Notes'] || row['notes'] || '').trim(),
-          };
-        }).filter(item => item.class_name);
+            return {
+              class_code: parsedCode,
+              class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
+              course_name: String(row['Course Name'] || row['course_name'] || '').trim(),
+              tutor_name: String(row['Tutor Name'] || row['tutor_name'] || '').trim(),
+              tutor_id: String(row['Tutor ID'] || row['tutor_id'] || '').trim(),
+              student_count: parseInt(row['Student Count'] || row['student_count'] || '1', 10) || 1,
+              lesson_number,
+              month,
+              week_start_date: String(row['Week Start'] || row['week_start_date'] || '').trim(),
+              week_end_date: String(row['Week End'] || row['week_end_date'] || '').trim(),
+              status: String(row['Status'] || row['status'] || 'pending').toLowerCase().trim(),
+              notes: finalNotes,
+            };
+          })
+          .filter((item) => item.class_name);
 
         if (mappedData.length === 0) {
           setErrorMsg('Tidak ada baris data kelas yang valid ditemukan di dalam file.');
@@ -74,27 +110,35 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
 
     setLoading(true);
     try {
-      // Menggunakan created_date & updated_date mengikut DDL Supabase (tanpa created_at)
+      const nowIso = new Date().toISOString();
       const recordsToInsert = previewData.map((item) => ({
         class_code: item.class_code,
         class_name: item.class_name,
         course_name: item.course_name,
         tutor_name: item.tutor_name,
         tutor_id: item.tutor_id || null,
-        week_start_date: item.week_start_date || new Date().toISOString().slice(0, 10),
-        week_end_date: item.week_end_date || new Date().toISOString().slice(0, 10),
+        student_count: item.student_count,
+        lesson_number: item.lesson_number,
+        month: item.month,
+        week_start_date: item.week_start_date || nowIso.slice(0, 10),
+        week_end_date: item.week_end_date || nowIso.slice(0, 10),
         status: ['pending', 'completed', 'overdue'].includes(item.status) ? item.status : 'pending',
         notes: item.notes,
-        created_date: new Date().toISOString(),
-        updated_date: new Date().toISOString(),
+        created_date: nowIso,
+        updated_date: nowIso,
       }));
 
-      const { error } = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
+      let { error } = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
+
+      if (error && /lesson_number|month/i.test(error.message)) {
+        const fallbackRecords = recordsToInsert.map(({ lesson_number, month, ...rest }) => rest);
+        ({ error } = await supabase.from('WeeklyFeedbackAssignment').insert(fallbackRecords));
+      }
 
       if (error) throw error;
 
       toast.success('Import Successful', {
-        description: `Berhasil mengimpor ${recordsToInsert.length} data weekly feedback.`
+        description: `Berhasil mengimpor ${recordsToInsert.length} data monthly student feedback.`
       });
 
       resetState();
@@ -119,10 +163,10 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
       <DialogContent className="bg-card border-border max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
-            <FileSpreadsheet className="w-5 h-5 text-chart-3" /> Import weekly class feedback
+            <FileSpreadsheet className="w-5 h-5 text-chart-3" /> Import monthly student feedback
           </DialogTitle>
           <DialogDescription>
-            Upload a filled .xlsx file — nothing is saved until you confirm.
+            Upload a filled .xlsx file (supports optional <strong>Lesson</strong> column to auto-assign Month 1, Month 2, etc.).
           </DialogDescription>
         </DialogHeader>
 
@@ -131,7 +175,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImpor
             <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-2xl p-8 cursor-pointer hover:bg-secondary/40 transition-colors">
               <Upload className="w-8 h-8 text-muted-foreground mb-2" />
               <span className="text-sm font-medium text-foreground">Choose an .xlsx file</span>
-              <span className="text-xs text-muted-foreground mt-1">Weekly_Student_Feedback_Template.xlsx</span>
+              <span className="text-xs text-muted-foreground mt-1">Monthly_Student_Feedback_Template.xlsx</span>
               <input
                 type="file"
                 accept=".xlsx, .xls"

@@ -8,6 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
+const calcMonthFromLesson = (val) => {
+  const num = parseInt(String(val || '').replace(/\D/g, ''), 10);
+  if (!num || num <= 0) return '';
+  return `Month ${Math.ceil(num / 4)}`;
+};
+
 export default function AssignmentFormDialog({ open, onOpenChange, editing, tutors = [], courses = [], onSaved }) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -16,6 +22,8 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
     tutor_id: '',
     tutor_name: '',
     student_count: 1,
+    lesson_number: '',
+    month: '',
     week_start_date: new Date().toISOString().slice(0, 10),
     week_end_date: new Date().toISOString().slice(0, 10),
     status: 'pending',
@@ -24,12 +32,16 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
 
   useEffect(() => {
     if (editing) {
+      const existingLesson = editing.lesson_number || '';
+      const existingMonth = editing.month || calcMonthFromLesson(existingLesson || editing.notes);
       setFormData({
         class_name: editing.class_name || '',
         course_name: editing.course_name || '',
         tutor_id: editing.tutor_id || '',
         tutor_name: editing.tutor_name || '',
         student_count: editing.student_count || 1,
+        lesson_number: existingLesson,
+        month: existingMonth,
         week_start_date: editing.week_start_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
         week_end_date: editing.week_end_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
         status: editing.status || 'pending',
@@ -42,6 +54,8 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
         tutor_id: '',
         tutor_name: '',
         student_count: 1,
+        lesson_number: '',
+        month: '',
         week_start_date: new Date().toISOString().slice(0, 10),
         week_end_date: new Date().toISOString().slice(0, 10),
         status: 'pending',
@@ -50,22 +64,56 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
     }
   }, [editing, open]);
 
+  const handleLessonChange = (rawVal) => {
+    const cleanDigits = rawVal.replace(/\D/g, '');
+    const autoMonth = calcMonthFromLesson(cleanDigits);
+    setFormData((prev) => ({
+      ...prev,
+      lesson_number: cleanDigits,
+      month: autoMonth,
+    }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
+      const parsedLesson = formData.lesson_number ? parseInt(formData.lesson_number, 10) : null;
+      const computedMonth = formData.month || calcMonthFromLesson(parsedLesson);
+      const autoNotes =
+        formData.notes?.trim() ||
+        (parsedLesson ? `Lesson ${parsedLesson} (${computedMonth})` : '');
+
       const payload = {
-        ...formData,
+        class_name: formData.class_name,
+        course_name: formData.course_name,
+        tutor_id: formData.tutor_id,
+        tutor_name: formData.tutor_name,
+        student_count: formData.student_count,
+        lesson_number: parsedLesson,
+        month: computedMonth || null,
+        week_start_date: formData.week_start_date,
+        week_end_date: formData.week_end_date,
+        status: formData.status,
+        notes: autoNotes,
         updated_date: new Date().toISOString(),
       };
 
       if (editing) {
-        const { error } = await supabase.from('WeeklyFeedbackAssignment').update(payload).eq('id', editing.id);
+        let { error } = await supabase.from('WeeklyFeedbackAssignment').update(payload).eq('id', editing.id);
+        if (error && /lesson_number|month/i.test(error.message)) {
+          const { lesson_number, month, ...fallbackPayload } = payload;
+          ({ error } = await supabase.from('WeeklyFeedbackAssignment').update(fallbackPayload).eq('id', editing.id));
+        }
         if (error) throw error;
         toast.success('Assignment updated');
       } else {
         payload.created_date = new Date().toISOString();
-        const { error } = await supabase.from('WeeklyFeedbackAssignment').insert([payload]);
+        let { error } = await supabase.from('WeeklyFeedbackAssignment').insert([payload]);
+        if (error && /lesson_number|month/i.test(error.message)) {
+          const { lesson_number, month, ...fallbackPayload } = payload;
+          ({ error } = await supabase.from('WeeklyFeedbackAssignment').insert([fallbackPayload]));
+        }
         if (error) throw error;
         toast.success('Assignment created');
       }
@@ -84,6 +132,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
     'Python Start',
     'Python Pro',
     'Graphic Design',
+    'Graphic Design Junior',
     'AI & Data Science',
     'Web Development',
     'Roblox Game Design'
@@ -95,7 +144,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-card border-border max-w-md">
         <DialogHeader>
-          <DialogTitle>{editing ? 'Edit Assignment' : 'Add Weekly Feedback Assignment'}</DialogTitle>
+          <DialogTitle>{editing ? 'Edit Assignment' : 'Add Monthly Feedback Assignment'}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
@@ -128,6 +177,28 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
+              <Label>Lesson Number</Label>
+              <Input
+                type="number"
+                min={1}
+                placeholder="e.g. 4, 8, 12"
+                value={formData.lesson_number}
+                onChange={(e) => handleLessonChange(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Auto Month</Label>
+              <Input
+                readOnly
+                value={formData.month || 'Auto from lesson'}
+                className="bg-secondary/50 text-muted-foreground font-medium"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
               <Label>Tutor</Label>
               <Select
                 value={formData.tutor_id}
@@ -152,7 +223,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
             </div>
 
             <div className="space-y-1.5">
-              <Label>Student Count (Private/Group)</Label>
+              <Label>Student Count</Label>
               <Input
                 type="number"
                 min={1}
@@ -164,7 +235,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Week Start</Label>
+              <Label>Period Start</Label>
               <Input
                 type="date"
                 value={formData.week_start_date}
@@ -172,7 +243,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Week End</Label>
+              <Label>Period End</Label>
               <Input
                 type="date"
                 value={formData.week_end_date}

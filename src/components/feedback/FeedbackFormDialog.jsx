@@ -63,7 +63,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
   const [perfCategories, setPerfCategories] = useState([]);
   const [allFeedbackRecords, setAllFeedbackRecords] = useState([]);
 
-  // Phase 2: Group progress & Smart Roster state
+  // Group progress & Smart Roster state
   const [sessionDoneCount, setSessionDoneCount] = useState(0);
   const [evaluatedNamesInSession, setEvaluatedNamesInSession] = useState([]);
 
@@ -92,10 +92,12 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
     }
   }, [open]);
 
-  // Helper to match course name from processTask against master courses
+  // Helper to match course name from processTask against master courses (instant fallback included)
   const resolveMatchedCourse = (rawCourseName, classCodeStr) => {
-    if (!courses.length) return rawCourseName || '';
-    const target = (rawCourseName || '').toLowerCase().trim();
+    const cleanRaw = (rawCourseName || '').trim();
+    if (!courses.length) return cleanRaw;
+
+    const target = cleanRaw.toLowerCase();
     if (target) {
       const exact = courses.find(c => c.name?.toLowerCase().trim() === target);
       if (exact) return exact.name;
@@ -103,28 +105,59 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
         c => target.includes(c.name?.toLowerCase().trim()) || c.name?.toLowerCase().trim().includes(target)
       );
       if (partial) return partial.name;
+      return cleanRaw;
     }
+
     // Fallback inference from class code abbreviations (e.g. VP, PS, PP, GD, WD, RB)
     const code = (classCodeStr || '').toUpperCase();
     if (/\bVP\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('visual'))?.name || '';
     if (/\bPS\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('python start'))?.name || '';
     if (/\bPP\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('python pro'))?.name || '';
+    if (/\bGDJ\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('graphic design junior'))?.name || '';
     if (/\bGD\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('graphic'))?.name || '';
     if (/\bWD\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('web'))?.name || '';
     if (/\bRB\b/.test(code)) return courses.find(c => c.name?.toLowerCase().includes('roblox'))?.name || '';
     return '';
   };
 
-  // Helper to infer month period from notes like "Lesson 4", "Lesson 8", "Lesson 12"
-  const inferMonthFromNotes = (notesStr) => {
-    if (!notesStr) return '';
-    const match = String(notesStr).match(/lesson\s*(\d+)/i);
-    if (!match) return '';
-    const lessonNum = parseInt(match[1], 10);
-    if (!isNaN(lessonNum) && lessonNum >= 4) {
-      return Math.ceil(lessonNum / 4);
+  // Helper to resolve numeric Month (1, 2, 3...) from task metadata, lesson number, or class history
+  const resolveMonthNumber = (task, classCodeStr) => {
+    if (!task) return '';
+
+    // 1. Direct month field (supports number 1 or string "Month 1")
+    if (task.month !== undefined && task.month !== null && String(task.month).trim() !== '') {
+      const parsedMonth = parseInt(String(task.month).replace(/\D/g, ''), 10);
+      if (!isNaN(parsedMonth) && parsedMonth > 0) return parsedMonth;
     }
-    return '';
+
+    // 2. Direct lesson_number column (Lesson 4 -> Month 1, Lesson 8 -> Month 2, etc.)
+    const directLesson = Number(task.lesson_number);
+    if (!isNaN(directLesson) && directLesson > 0) {
+      return Math.ceil(directLesson / 4);
+    }
+
+    // 3. Scan notes or class_name for "Lesson X"
+    const textToScan = `${task.notes || ''} ${task.class_name || ''}`;
+    const match = textToScan.match(/lesson\s*#?\s*(\d+)/i);
+    if (match) {
+      const lessonNum = parseInt(match[1], 10);
+      if (!isNaN(lessonNum) && lessonNum > 0) {
+        return Math.ceil(lessonNum / 4);
+      }
+    }
+
+    // 4. Fallback: count distinct past evaluated months for this class_code
+    const code = (classCodeStr || '').toLowerCase().trim();
+    if (code && allFeedbackRecords.length > 0) {
+      const pastMonths = new Set(
+        allFeedbackRecords
+          .filter(r => (r.class_code || '').toLowerCase().trim() === code && Number(r.month) > 0)
+          .map(r => Number(r.month))
+      );
+      return pastMonths.size + 1;
+    }
+
+    return 1;
   };
 
   useEffect(() => {
@@ -139,17 +172,17 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
       setSessionDoneCount(0);
       setEvaluatedNamesInSession([]);
     } else if (processTask) {
-      const resolvedClassCode = processTask.class_code || processTask.class_name || '';
+      const resolvedClassCode = String(processTask.class_code || processTask.class_name || '').trim();
       const matchedCourse = resolveMatchedCourse(processTask.course_name, resolvedClassCode);
-      const inferredMonth = inferMonthFromNotes(processTask.notes);
+      const resolvedMonth = resolveMonthNumber(processTask, resolvedClassCode);
 
       let autoTopic = '';
       let autoKeyResult = '';
       let autoNewSkills = '';
 
-      if (matchedCourse && inferredMonth) {
+      if (matchedCourse && resolvedMonth) {
         const mod = modules.find(
-          m => m.course_name === matchedCourse && Number(m.month) === Number(inferredMonth)
+          m => m.course_name?.toLowerCase().trim() === matchedCourse.toLowerCase().trim() && Number(m.month) === Number(resolvedMonth)
         );
         if (mod) {
           autoTopic = mod.module_topic || '';
@@ -158,12 +191,13 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
         }
       }
 
-      setForm({
+      setForm(prev => ({
         ...EMPTY_FORM,
+        student_name: prev.student_name && evaluatedNamesInSession.length > 0 ? prev.student_name : '',
         class_code: resolvedClassCode,
         course_category_id: matchedCourse,
         course_name: matchedCourse,
-        month: inferredMonth || '',
+        month: resolvedMonth || '',
         module_topic: autoTopic,
         key_result: autoKeyResult,
         new_skills: autoNewSkills,
@@ -171,7 +205,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
         tutor_name: currentUser?.full_name || processTask.tutor_name || '',
         tutor_photo: currentUser?.photo_url || '',
         tutor_telegram: currentUser?.telegram_account || '',
-      });
+      }));
       setSessionDoneCount(Number(processTask.completed_count) || 0);
       setEvaluatedNamesInSession([]);
     } else {
@@ -207,9 +241,32 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
     if (t) setForm(f => ({ ...f, tutor_id: id, tutor_name: t.full_name, tutor_photo: t.photo_url || '', tutor_telegram: t.telegram_account || '' }));
   };
 
+  // Course options include current selected course immediately so dropdown renders with zero lag
+  const displayedCourses = useMemo(() => {
+    const list = [...courses];
+    if (
+      form.course_category_id &&
+      !list.some(c => c.name?.toLowerCase().trim() === form.course_category_id.toLowerCase().trim())
+    ) {
+      list.unshift({ id: 'prefilled-course', name: form.course_category_id });
+    }
+    return list;
+  }, [courses, form.course_category_id]);
+
   // Filtered modules based on selected course
-  const courseModules = modules.filter(m => m.course_name === form.course_category_id);
-  const availableMonths = [...new Set(courseModules.map(m => m.month).filter(Boolean))].sort((a, b) => a - b);
+  const courseModules = modules.filter(
+    m => m.course_name?.toLowerCase().trim() === (form.course_category_id || '').toLowerCase().trim()
+  );
+
+  // Available months include resolved form.month immediately so Month renders with zero lag
+  const availableMonths = useMemo(() => {
+    const monthSet = new Set(courseModules.map(m => Number(m.month)).filter(Boolean));
+    if (form.month && Number(form.month) > 0) {
+      monthSet.add(Number(form.month));
+    }
+    return [...monthSet].sort((a, b) => a - b);
+  }, [courseModules, form.month]);
+
   const moduleTopics = [...new Set(courseModules.map(m => m.module_topic).filter(Boolean))];
   const keyResults = [...new Set(courseModules.map(m => m.key_result).filter(Boolean))];
   const newSkillsList = [...new Set(courseModules.map(m => m.new_skills).filter(Boolean))];
@@ -322,7 +379,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
 
       const created = await db.entities.FeedbackRecord.create(saveForm);
 
-      // Send notifications (existing behavior)
+      // Send notifications
       if (currentUser?.role === 'Tutor' || currentUser?.role === 'Team Leader') {
         const admins = await db.entities.CustomUser.filter({ is_active: true });
         const adminUsers = admins.filter(u => ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team'].includes(u.role));
@@ -431,7 +488,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
       <DialogContent className="bg-card border-border max-w-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {editing ? 'Edit Feedback' : processTask ? 'Process Weekly Class Feedback' : 'Add Student Feedback'}
+            {editing ? 'Edit Feedback' : processTask ? 'Process Monthly Student Feedback' : 'Add Student Feedback'}
           </DialogTitle>
         </DialogHeader>
 
@@ -519,7 +576,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
             <Select value={form.course_category_id} onValueChange={handleCourseChange}>
               <SelectTrigger className="bg-muted border-border"><SelectValue placeholder="Select course..." /></SelectTrigger>
               <SelectContent className="bg-card border-border">
-                {courses.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
+                {displayedCourses.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </Field>
