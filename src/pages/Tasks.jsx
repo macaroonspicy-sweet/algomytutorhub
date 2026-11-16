@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Plus, Search, Loader2, FileSpreadsheet, ClipboardList, Clock, CheckCircle2,
-  AlertTriangle, CircleDot, ListChecks, CalendarDays, ChevronRight
+  AlertTriangle, CircleDot, ListChecks, CalendarDays, ChevronRight, Pencil, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import TaskFormDialog from '@/components/tasks/TaskFormDialog';
@@ -47,6 +47,7 @@ export default function Tasks() {
   const [exportOpen, setExportOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
   const canManage = ['Team Leader', 'Head of Tutor'].includes(currentUser?.role);
   const canView = hasPermission('task_management');
@@ -83,6 +84,24 @@ export default function Tasks() {
   useEffect(() => {
     if (currentUser?.id) load();
   }, [currentUser?.id]);
+
+  const handleQuickDelete = async (task) => {
+    const ok = window.confirm(`Delete task "${task.title}" assigned to ${task.assigned_tutor_name}?`);
+    if (!ok) return;
+
+    setDeletingId(task.id);
+    try {
+      await supabase.from('TaskActivity').delete().eq('task_id', task.id);
+      const { error } = await supabase.from('TutorTask').delete().eq('id', task.id);
+      if (error) throw error;
+      toast.success('Task deleted');
+      await load();
+    } catch (err) {
+      toast.error('Could not delete task', { description: err.message });
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const filtered = tasks.filter((task) => {
     if (tutor !== 'all' && String(task.assigned_tutor_id) !== String(tutor)) return false;
@@ -305,7 +324,7 @@ export default function Tasks() {
                   <th className="px-4 py-3 font-medium">Priority</th>
                   <th className="px-4 py-3 font-medium">Deadline</th>
                   <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium text-right">Open</th>
+                  <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -334,10 +353,45 @@ export default function Tasks() {
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded-full border text-[11px] font-medium whitespace-nowrap ${meta.className}`}>{meta.label}</span>
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <Button size="icon" variant="ghost" onClick={() => openTask(task)} className="w-8 h-8 text-muted-foreground hover:text-foreground">
-                          <ChevronRight className="w-4 h-4" />
-                        </Button>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1">
+                          {canManage && (
+                            <>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title="Edit task"
+                                onClick={() => openTask(task)}
+                                className="w-8 h-8 text-muted-foreground hover:text-primary"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title="Delete task"
+                                disabled={deletingId === task.id}
+                                onClick={() => handleQuickDelete(task)}
+                                className="w-8 h-8 text-muted-foreground hover:text-destructive"
+                              >
+                                {deletingId === task.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-4 h-4" />
+                                )}
+                              </Button>
+                            </>
+                          )}
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title="View details"
+                            onClick={() => openTask(task)}
+                            className="w-8 h-8 text-muted-foreground hover:text-foreground"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -355,7 +409,7 @@ export default function Tasks() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         task={selected}
-        mode="manage"
+        mode={canManage ? 'manage' : 'tutor'}
         tutors={tutors}
         onChanged={async () => {
           const items = await load();
