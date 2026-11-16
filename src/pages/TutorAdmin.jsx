@@ -34,6 +34,8 @@ import {
   Bell,
   Search,
   CheckCircle2,
+  ArrowUpRight,
+  BarChart3,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -66,18 +68,438 @@ const makeId = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-function KpiCard({ label, value, sub, icon: Icon, tone }) {
+function MiniSparkline({ points = [], strokeClass = 'stroke-primary', fillClass = 'fill-primary/10' }) {
+  const safePoints = points.length >= 2 ? points : [0, 0, 0, 0];
+  const max = Math.max(...safePoints, 1);
+  const min = Math.min(...safePoints, 0);
+  const range = Math.max(max - min, 1);
+  const width = 128;
+  const height = 42;
+  const padX = 6;
+  const padY = 6;
+
+  const coords = safePoints.map((val, idx) => {
+    const x = padX + (idx / (safePoints.length - 1)) * (width - padX * 2);
+    const y = height - padY - ((val - min) / range) * (height - padY * 2);
+    return { x, y };
+  });
+
+  const linePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L ${coords[coords.length - 1].x.toFixed(1)} ${height} L ${coords[0].x.toFixed(1)} ${height} Z`;
+
   return (
-    <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
-      <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${tone}`}>
-        <Icon className="w-5 h-5 text-white" />
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-32 h-11 overflow-visible flex-shrink-0">
+      <path d={areaPath} className={fillClass} />
+      <path
+        d={linePath}
+        fill="none"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={strokeClass}
+      />
+      {coords.map((c, idx) => (
+        <circle
+          key={idx}
+          cx={c.x}
+          cy={c.y}
+          r="2.5"
+          className={`${strokeClass} fill-card`}
+          strokeWidth="2"
+        />
+      ))}
+    </svg>
+  );
+}
+
+function HeroBentoCard({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  tone,
+  barTone,
+  strokeClass,
+  fillClass,
+  sparklineData,
+  progressPct,
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group text-left bg-card border border-border hover:border-primary/50 hover:shadow-sm rounded-2xl p-5 transition-all flex flex-col justify-between gap-4 cursor-pointer"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3.5 min-w-0">
+          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${tone}`}>
+            <Icon className="w-6 h-6 text-white" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-3xl font-bold text-foreground leading-tight tracking-tight">{value}</div>
+            <div className="text-sm font-semibold text-foreground/85 mt-0.5">{label}</div>
+            {sub && <div className="text-xs text-muted-foreground mt-0.5">{sub}</div>}
+          </div>
+        </div>
+
+        <div className="hidden sm:flex flex-col items-end">
+          <MiniSparkline points={sparklineData} strokeClass={strokeClass} fillClass={fillClass} />
+        </div>
       </div>
-      <div className="min-w-0">
-        <div className="text-2xl font-bold text-foreground leading-tight">{value}</div>
-        <div className="text-xs font-medium text-foreground/80 truncate">{label}</div>
-        {sub && <div className="text-[11px] text-muted-foreground truncate mt-0.5">{sub}</div>}
+
+      <div className="flex items-center justify-between gap-4 pt-1">
+        <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${barTone}`}
+            style={{ width: `${Math.min(100, Math.max(0, progressPct || 0))}%` }}
+          />
+        </div>
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground group-hover:text-primary bg-secondary/70 group-hover:bg-primary/10 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap">
+          View Chart <ArrowUpRight className="w-3.5 h-3.5" />
+        </span>
       </div>
-    </div>
+    </button>
+  );
+}
+
+function SecondaryBentoCard({ label, value, sub, icon: Icon, tone, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group text-left bg-card border border-border hover:border-primary/50 hover:shadow-sm rounded-2xl p-4 transition-all flex items-start justify-between gap-3 cursor-pointer"
+    >
+      <div className="flex items-center gap-3.5 min-w-0">
+        <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${tone}`}>
+          <Icon className="w-5 h-5 text-white" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-2xl font-bold text-foreground leading-tight">{value}</div>
+          <div className="text-xs font-semibold text-foreground/85 mt-0.5">{label}</div>
+          {sub && <div className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{sub}</div>}
+        </div>
+      </div>
+      <ArrowUpRight className="w-4 h-4 text-muted-foreground/60 group-hover:text-primary flex-shrink-0 transition-colors mt-0.5" />
+    </button>
+  );
+}
+
+function DynamicChartModal({
+  metricKey,
+  onClose,
+  filteredRecords,
+  conductedRecords,
+  groupClasses,
+  lesson1Records,
+  weeklySummary,
+  courseSummary,
+  avgAttendance,
+  totalKids,
+  multiple4Count,
+  filterBadgeText,
+}) {
+  const [viewMode, setViewMode] = useState('weekly');
+
+  useEffect(() => {
+    if (!metricKey) return;
+    if (metricKey === 'kids' || metricKey === 'lesson1') {
+      setViewMode('course');
+    } else if (metricKey === 'classes') {
+      setViewMode('format');
+    } else {
+      setViewMode('weekly');
+    }
+  }, [metricKey]);
+
+  const metricMeta = {
+    conducted: {
+      title: 'Lessons Conducted Analytics',
+      headline: `${conductedRecords.length} Conducted`,
+      subtitle: `Out of ${filteredRecords.length} total scheduled lessons`,
+      barColor: 'bg-primary',
+      unit: 'lessons',
+    },
+    attendance: {
+      title: 'Average Attendance Trend',
+      headline: `${avgAttendance}% Avg Attendance`,
+      subtitle: `Across ${conductedRecords.length} valid conducted classes`,
+      barColor: 'bg-chart-2',
+      unit: '%',
+    },
+    classes: {
+      title: 'Active Classes Breakdown',
+      headline: `${groupClasses.length} Active Classes`,
+      subtitle: 'Unique classes across Group, Individual & Intensive formats',
+      barColor: 'bg-chart-3',
+      unit: 'classes',
+    },
+    kids: {
+      title: 'Total Kids Distribution',
+      headline: `${totalKids} Total Kids`,
+      subtitle: 'Accumulated students across active classes',
+      barColor: 'bg-accent',
+      unit: 'kids',
+    },
+    lesson1: {
+      title: 'Lesson 1 New Classes Overview',
+      headline: `${lesson1Records.length} Lesson 1 Schedules`,
+      subtitle: 'First-session classes in the selected filter',
+      barColor: 'bg-chart-4',
+      unit: 'classes',
+    },
+    multiple4: {
+      title: 'Every 4th Lesson (Weekly Report Milestones)',
+      headline: `${multiple4Count} Milestone Lessons`,
+      subtitle: 'Lesson 4, 8, 12, 16... eligible for Weekly Report',
+      barColor: 'bg-chart-5',
+      unit: 'lessons',
+    },
+  };
+
+  const currentMeta = metricMeta[metricKey] || metricMeta.conducted;
+
+  const chartSeries = useMemo(() => {
+    if (!metricKey) return [];
+
+    if (viewMode === 'weekly') {
+      return weeklySummary.map((w) => {
+        const weekRows = filteredRecords.filter((r) => r.week_label === w.week);
+        let val = 0;
+        let detail = '';
+
+        if (metricKey === 'conducted') {
+          val = w.conducted;
+          detail = `${w.conducted} / ${w.scheduled} scheduled`;
+        } else if (metricKey === 'attendance') {
+          val = w.avgAtt;
+          detail = `${w.totalAttended} students attended`;
+        } else if (metricKey === 'classes') {
+          const uniq = new Set(weekRows.map((r) => r.group_id || r.group_title).filter(Boolean));
+          val = uniq.size;
+          detail = `${w.groupCount} Group · ${w.indivCount} Indiv · ${w.intensCount} Intensive`;
+        } else if (metricKey === 'kids') {
+          val = w.totalAttended;
+          detail = `Attended across ${w.conducted} conducted lessons`;
+        } else if (metricKey === 'lesson1') {
+          val = weekRows.filter((r) => !r.is_test_group && r.lesson_number === 1).length;
+          detail = 'New Lesson 1 sessions';
+        } else if (metricKey === 'multiple4') {
+          val = weekRows.filter(
+            (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
+          ).length;
+          detail = '4th-lesson report triggers';
+        }
+
+        return {
+          label: w.week.replace(' (', '\n('),
+          shortLabel: w.week.split(' ')[0] + ' ' + w.week.split(' ')[1],
+          value: val,
+          detail,
+        };
+      });
+    }
+
+    if (viewMode === 'course') {
+      return courseSummary.slice(0, 8).map((c) => {
+        const courseRows = filteredRecords.filter((r) => (r.course || 'Other') === c.course);
+        const condRows = courseRows.filter((r) => r.is_conducted);
+        let val = 0;
+        let detail = '';
+
+        if (metricKey === 'conducted') {
+          val = c.conducted_lessons;
+          detail = `${c.class_count} active classes`;
+        } else if (metricKey === 'attendance') {
+          val = condRows.length
+            ? Math.round(condRows.reduce((s, r) => s + (r.attendance_pct || 0), 0) / condRows.length)
+            : 0;
+          detail = `${condRows.length} conducted lessons`;
+        } else if (metricKey === 'classes') {
+          val = c.class_count;
+          detail = `${c.kids_count} total kids`;
+        } else if (metricKey === 'kids') {
+          val = c.kids_count;
+          detail = `${c.class_count} classes · ${c.conducted_lessons} conducted`;
+        } else if (metricKey === 'lesson1') {
+          val = courseRows.filter((r) => !r.is_test_group && r.lesson_number === 1).length;
+          detail = `${c.kids_count} total kids in course`;
+        } else if (metricKey === 'multiple4') {
+          val = courseRows.filter(
+            (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
+          ).length;
+          detail = `${c.class_count} active classes`;
+        }
+
+        return {
+          label: c.course,
+          shortLabel: c.course,
+          value: val,
+          detail,
+        };
+      });
+    }
+
+    // By Format (Group / Individual / Intensive)
+    const formats = ['Group', 'Individual', 'Intensive'];
+    return formats.map((fmt) => {
+      const fmtRows = filteredRecords.filter(
+        (r) => (r.group_type || '').toLowerCase() === fmt.toLowerCase()
+      );
+      const fmtCond = fmtRows.filter((r) => r.is_conducted);
+      const fmtClasses = groupClasses.filter(
+        (c) => (c.group_type || '').toLowerCase() === fmt.toLowerCase()
+      );
+      let val = 0;
+      let detail = '';
+
+      if (metricKey === 'conducted') {
+        val = fmtCond.length;
+        detail = `out of ${fmtRows.length} scheduled`;
+      } else if (metricKey === 'attendance') {
+        val = fmtCond.length
+          ? Math.round(fmtCond.reduce((s, r) => s + (r.attendance_pct || 0), 0) / fmtCond.length)
+          : 0;
+        detail = `${fmtCond.length} conducted lessons`;
+      } else if (metricKey === 'classes') {
+        val = fmtClasses.length;
+        detail = `${fmtClasses.reduce((s, c) => s + c.kids_count, 0)} kids enrolled`;
+      } else if (metricKey === 'kids') {
+        val = fmtClasses.reduce((s, c) => s + c.kids_count, 0);
+        detail = `${fmtClasses.length} active classes`;
+      } else if (metricKey === 'lesson1') {
+        val = fmtRows.filter((r) => !r.is_test_group && r.lesson_number === 1).length;
+        detail = `${fmtClasses.length} active classes`;
+      } else if (metricKey === 'multiple4') {
+        val = fmtRows.filter(
+          (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
+        ).length;
+        detail = `${fmtClasses.length} active classes`;
+      }
+
+      return {
+        label: fmt,
+        shortLabel: fmt,
+        value: val,
+        detail,
+      };
+    });
+  }, [metricKey, viewMode, weeklySummary, filteredRecords, courseSummary, groupClasses]);
+
+  const maxChartValue = useMemo(() => {
+    if (metricKey === 'attendance') return 100;
+    return Math.max(...chartSeries.map((d) => d.value), 1);
+  }, [chartSeries, metricKey]);
+
+  return (
+    <Dialog open={Boolean(metricKey)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="bg-card border-border max-w-2xl">
+        <DialogHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+            <div>
+              <DialogTitle className="flex items-center gap-2 text-foreground text-lg">
+                <BarChart3 className="w-5 h-5 text-primary" />
+                {currentMeta.title}
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Active Filter: <span className="font-medium text-foreground">{filterBadgeText}</span>
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-bold text-primary">{currentMeta.headline}</div>
+              <div className="text-[11px] text-muted-foreground">{currentMeta.subtitle}</div>
+            </div>
+          </div>
+        </DialogHeader>
+
+        {/* View Mode Switcher */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+          <div className="flex gap-1.5 bg-secondary/60 p-1 rounded-xl">
+            {[
+              { id: 'weekly', label: 'Weekly Trend' },
+              { id: 'course', label: 'Per Course' },
+              { id: 'format', label: 'By Format' },
+            ].map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setViewMode(mode.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  viewMode === mode.id
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+          <span className="text-[11px] text-muted-foreground">
+            Updates automatically with page filters
+          </span>
+        </div>
+
+        {/* Dynamic Visualization */}
+        {chartSeries.length === 0 ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">
+            No data available for the selected filter combination.
+          </div>
+        ) : viewMode === 'weekly' || viewMode === 'format' ? (
+          <div className="pt-2 space-y-4">
+            <div className="bg-secondary/30 border border-border rounded-2xl p-5">
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 items-end h-48 pt-6">
+                {chartSeries.map((item) => {
+                  const pct = Math.round((item.value / maxChartValue) * 100);
+                  return (
+                    <div key={item.label} className="flex flex-col items-center h-full justify-end gap-2">
+                      <span className="text-xs font-bold text-foreground">
+                        {item.value}
+                        {currentMeta.unit === '%' ? '%' : ''}
+                      </span>
+                      <div className="w-full max-w-[54px] h-32 bg-secondary rounded-xl flex items-end overflow-hidden p-1">
+                        <div
+                          className={`w-full rounded-lg transition-all duration-500 ${currentMeta.barColor}`}
+                          style={{ height: `${Math.max(pct, item.value > 0 ? 8 : 0)}%` }}
+                        />
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs font-semibold text-foreground">{item.shortLabel}</div>
+                        <div className="text-[10px] text-muted-foreground line-clamp-1">{item.detail}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 pt-1">
+            {chartSeries.map((item) => {
+              const pct = Math.round((item.value / maxChartValue) * 100);
+              return (
+                <div key={item.label} className="bg-secondary/30 border border-border rounded-xl p-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-foreground truncate" title={item.label}>
+                      {item.label}
+                    </span>
+                    <span className="font-bold text-foreground whitespace-nowrap">
+                      {item.value} {currentMeta.unit !== '%' ? currentMeta.unit : '%'}
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${currentMeta.barColor}`}
+                      style={{ width: `${Math.max(pct, item.value > 0 ? 4 : 0)}%` }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">{item.detail}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -97,6 +519,7 @@ export default function TutorAdmin() {
 
   const [activeTab, setActiveTab] = useState('overview');
   const [page, setPage] = useState(1);
+  const [selectedChartMetric, setSelectedChartMetric] = useState(null);
 
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState(null);
@@ -106,7 +529,6 @@ export default function TutorAdmin() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Fetch all records in batches of 1,000 rows to bypass Supabase default row limits
       let allRecords = [];
       let from = 0;
       const step = 1000;
@@ -328,6 +750,20 @@ export default function TutorAdmin() {
     [filteredRecords]
   );
 
+  const filterBadgeText = useMemo(() => {
+    const mName =
+      selectedMonth === 'all'
+        ? 'All Months'
+        : MONTHS.find((m) => m.value === selectedMonth)?.label || selectedMonth;
+    const parts = [
+      `${mName} ${selectedYear === 'all' ? '' : selectedYear}`.trim(),
+      selectedWeek !== 'all' ? selectedWeek : null,
+      selectedCourse !== 'all' ? selectedCourse : null,
+      selectedTutor !== 'all' ? selectedTutor : null,
+    ].filter(Boolean);
+    return parts.join(' · ');
+  }, [selectedMonth, selectedYear, selectedWeek, selectedCourse, selectedTutor]);
+
   const matchTutorUser = (teacherName) => {
     if (!teacherName) return null;
     const clean = teacherName.toLowerCase().trim();
@@ -371,7 +807,6 @@ export default function TutorAdmin() {
         if (upsertErr) throw upsertErr;
       }
 
-      // Compute accurate student count per class across existing DB records + newly parsed rows
       const classKidsMap = new Map();
       for (const item of [...records, ...parsed]) {
         const key = String(item.group_id || item.group_title || '').toLowerCase().trim();
@@ -582,6 +1017,9 @@ export default function TutorAdmin() {
 
   const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
   const paginatedRaw = filteredRecords.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
+  const conductedPct = filteredRecords.length
+    ? Math.round((conductedRecords.length / filteredRecords.length) * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -602,6 +1040,7 @@ export default function TutorAdmin() {
         </div>
       </div>
 
+      {/* Filter Bar */}
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
@@ -680,15 +1119,74 @@ export default function TutorAdmin() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-        <KpiCard label="Lessons Conducted" value={conductedRecords.length} sub={`out of ${filteredRecords.length} schedules`} icon={CalendarCheck} tone="bg-primary" />
-        <KpiCard label="Active Classes" value={groupClasses.length} sub="Group / Indiv / Intensive" icon={BookOpen} tone="bg-chart-3" />
-        <KpiCard label="Total Kids" value={totalKids} sub="Accumulated students per class" icon={Users} tone="bg-accent" />
-        <KpiCard label="Lesson 1 This Month" value={lesson1Records.length} sub={`${lesson1ByCourse.length} distinct courses`} icon={Sparkles} tone="bg-chart-4" />
-        <KpiCard label="Avg Attendance" value={`${avgAttendance}%`} sub="Average across conducted classes" icon={Percent} tone="bg-chart-2" />
-        <KpiCard label="Every 4th Lesson" value={multiple4Count} sub="Lesson 4, 8, 12, 16..." icon={Bell} tone="bg-chart-5" />
+      {/* Option B: Bento Grid KPI Cards (Original Theme Colors + Click for Dynamic Chart) */}
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+          <HeroBentoCard
+            label="Lessons Conducted"
+            value={conductedRecords.length}
+            sub={`Out of ${filteredRecords.length} schedules (${conductedPct}% completion)`}
+            icon={CalendarCheck}
+            tone="bg-primary"
+            barTone="bg-primary"
+            strokeClass="stroke-primary"
+            fillClass="fill-primary/10"
+            sparklineData={weeklySummary.map((w) => w.conducted)}
+            progressPct={conductedPct}
+            onClick={() => setSelectedChartMetric('conducted')}
+          />
+          <HeroBentoCard
+            label="Avg Attendance"
+            value={`${avgAttendance}%`}
+            sub="Average attendance across valid conducted classes"
+            icon={Percent}
+            tone="bg-chart-2"
+            barTone="bg-chart-2"
+            strokeClass="stroke-chart-2"
+            fillClass="fill-chart-2/15"
+            sparklineData={weeklySummary.map((w) => w.avgAtt)}
+            progressPct={avgAttendance}
+            onClick={() => setSelectedChartMetric('attendance')}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+          <SecondaryBentoCard
+            label="Active Classes"
+            value={groupClasses.length}
+            sub="Group / Individual / Intensive"
+            icon={BookOpen}
+            tone="bg-chart-3"
+            onClick={() => setSelectedChartMetric('classes')}
+          />
+          <SecondaryBentoCard
+            label="Total Kids"
+            value={totalKids}
+            sub="Accumulated students per class"
+            icon={Users}
+            tone="bg-accent"
+            onClick={() => setSelectedChartMetric('kids')}
+          />
+          <SecondaryBentoCard
+            label="Lesson 1 This Month"
+            value={lesson1Records.length}
+            sub={`${lesson1ByCourse.length} distinct courses`}
+            icon={Sparkles}
+            tone="bg-chart-4"
+            onClick={() => setSelectedChartMetric('lesson1')}
+          />
+          <SecondaryBentoCard
+            label="Every 4th Lesson"
+            value={multiple4Count}
+            sub="Lesson 4, 8, 12, 16..."
+            icon={Bell}
+            tone="bg-chart-5"
+            onClick={() => setSelectedChartMetric('multiple4')}
+          />
+        </div>
       </div>
 
+      {/* Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-border pb-2">
         {[
           { id: 'overview', label: 'Weekly & Course Summary' },
@@ -1005,6 +1503,23 @@ export default function TutorAdmin() {
         </>
       )}
 
+      {/* Dynamic Chart Pop-Up Dialog */}
+      <DynamicChartModal
+        metricKey={selectedChartMetric}
+        onClose={() => setSelectedChartMetric(null)}
+        filteredRecords={filteredRecords}
+        conductedRecords={conductedRecords}
+        groupClasses={groupClasses}
+        lesson1Records={lesson1Records}
+        weeklySummary={weeklySummary}
+        courseSummary={courseSummary}
+        avgAttendance={avgAttendance}
+        totalKids={totalKids}
+        multiple4Count={multiple4Count}
+        filterBadgeText={filterBadgeText}
+      />
+
+      {/* Import Dialog */}
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent className="bg-card border-border max-w-lg">
           <DialogHeader>
