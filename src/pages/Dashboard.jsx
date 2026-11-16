@@ -9,8 +9,8 @@ import QCSubmissionPanel from '@/components/qc/QCSubmissionPanel';
 
 function StatCard({ label, value, icon: Icon, color, glow }) {
   return (
-    <div className={`bg-card border border-border rounded-2xl p-6 flex items-center gap-5 ${glow}`}>
-      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color}`}>
+    <div className={`bg-card border border-border rounded-2xl p-6 flex items-center gap-5 ${glow || ''}`}>
+      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 ${color}`}>
         {Icon && <Icon className="w-6 h-6 text-white" />}
       </div>
       <div>
@@ -105,14 +105,14 @@ export default function Dashboard() {
               label="Total Users" 
               value={loading ? '...' : stats.totalUsers || 0} 
               icon={Users} 
-              color="bg-primary/70" 
+              color="bg-primary" 
               glow="glow-purple" 
             />
             <StatCard 
               label="Total Tutors" 
               value={loading ? '...' : stats.tutors || 0} 
               icon={BookOpen} 
-              color="bg-accent/70" 
+              color="bg-indigo-600" 
               glow="glow-cyan" 
             />
             {hasQcPermission && (
@@ -120,7 +120,7 @@ export default function Dashboard() {
                 label="QC Records" 
                 value={loading ? '...' : stats.qcRecords || 0} 
                 icon={CheckSquare} 
-                color="bg-chart-3/70" 
+                color="bg-chart-3" 
               />
             )}
             {hasFeedbackPermission && (
@@ -128,7 +128,7 @@ export default function Dashboard() {
                 label="Feedback Records" 
                 value={loading ? '...' : stats.feedbackRecords || 0} 
                 icon={MessageSquare} 
-                color="bg-chart-4/70" 
+                color="bg-chart-4" 
               />
             )}
           </div>
@@ -211,13 +211,13 @@ export default function Dashboard() {
                 label="My QC Records" 
                 value={loading ? '...' : stats.myQcRecords || 0} 
                 icon={CheckSquare} 
-                color="bg-chart-3/70" 
+                color="bg-chart-3" 
               />
               <StatCard 
                 label="Average QC Score" 
                 value={loading ? '...' : `${stats.avgQcScore || 0}/100`} 
                 icon={Award} 
-                color="bg-accent/70" 
+                color="bg-indigo-600" 
               />
             </>
           )}
@@ -226,14 +226,14 @@ export default function Dashboard() {
               label="My Feedback" 
               value={loading ? '...' : stats.myFeedbackRecords || 0} 
               icon={MessageSquare} 
-              color="bg-chart-4/70" 
+              color="bg-chart-4" 
             />
           )}
           <StatCard 
             label="My Courses" 
             value={loading ? '...' : (currentUser?.taught_courses?.length || 0)} 
             icon={BookOpen} 
-            color="bg-primary/70" 
+            color="bg-primary" 
           />
         </div>
       )}
