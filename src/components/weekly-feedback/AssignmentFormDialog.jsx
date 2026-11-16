@@ -15,6 +15,13 @@ const calcMonthFromLesson = (val) => {
   return `Month ${Math.ceil(num / 4)}`;
 };
 
+const STATUS_OPTIONS = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'rescheduled', label: 'Rescheduled' },
+];
+
 export default function AssignmentFormDialog({ open, onOpenChange, editing, tutors = [], courses = [], onSaved }) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -45,7 +52,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
         month: existingMonth,
         week_start_date: editing.week_start_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
         week_end_date: editing.week_end_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
-        status: editing.status || 'pending',
+        status: (editing.status || 'pending').toLowerCase(),
         notes: editing.notes || ''
       });
     } else {
@@ -85,6 +92,10 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
         formData.notes?.trim() ||
         (parsedLesson ? `Lesson ${parsedLesson} (${computedMonth})` : '');
 
+      const normalizedStatus = (formData.status || 'pending').toLowerCase();
+      const isCompleted = normalizedStatus === 'completed';
+      const nowIso = new Date().toISOString();
+
       const payload = {
         class_name: formData.class_name,
         course_name: formData.course_name,
@@ -95,9 +106,22 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
         month: computedMonth || null,
         week_start_date: formData.week_start_date,
         week_end_date: formData.week_end_date,
-        status: formData.status,
+        status: normalizedStatus,
+        is_done: isCompleted,
+        ...(isCompleted
+          ? {
+              completed_count: formData.student_count || 1,
+              completed_at: editing?.completed_at || nowIso,
+              completed_date: editing?.completed_date || nowIso,
+            }
+          : {
+              ...(normalizedStatus === 'pending' ? { completed_count: 0 } : {}),
+              completed_at: null,
+              completed_date: null,
+              completed_by_name: null,
+            }),
         notes: autoNotes,
-        updated_date: new Date().toISOString(),
+        updated_date: nowIso,
       };
 
       if (editing) {
@@ -109,7 +133,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
         if (error) throw error;
         toast.success('Assignment updated');
       } else {
-        payload.created_date = new Date().toISOString();
+        payload.created_date = nowIso;
         let { error } = await supabase.from('WeeklyFeedbackAssignment').insert([payload]);
         if (error && /lesson_number|month/i.test(error.message)) {
           const { lesson_number, month, ...fallbackPayload } = payload;
@@ -146,7 +170,7 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border max-w-md">
+      <DialogContent className="bg-card border-border max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editing ? 'Edit Assignment' : 'Add Monthly Feedback Assignment'}</DialogTitle>
         </DialogHeader>
@@ -254,6 +278,23 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
                 onChange={(e) => setFormData({ ...formData, week_end_date: e.target.value })}
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Status</Label>
+            <Select
+              value={formData.status}
+              onValueChange={(val) => setFormData({ ...formData, status: val })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select status" />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
