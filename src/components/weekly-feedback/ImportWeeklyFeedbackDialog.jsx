@@ -1,231 +1,292 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '@/lib/supabaseClient';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Loader2, Upload, FileSpreadsheet, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Upload, FileSpreadsheet, AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { triggerTelegramNotification } from '@/lib/telegramNotifier';
 
-const extractLessonAndMonth = (row) => {
-  const rawLesson =
-    row['Lesson'] ??
-    row['Lesson Number'] ??
-    row['lesson'] ??
-    row['lesson_number'] ??
-    '';
-
-  const rawMonth = String(row['Month'] ?? row['month'] ?? '').trim();
-  const rawNotes = String(row['Notes'] ?? row['notes'] ?? '').trim();
-
-  let lessonNum = parseInt(String(rawLesson).replace(/\D/g, ''), 10);
-  if ((!lessonNum || isNaN(lessonNum)) && rawNotes) {
-    const match = rawNotes.match(/lesson\s*#?\s*(\d+)/i);
-    if (match) lessonNum = parseInt(match[1], 10);
+function parseDateSafe(val) {
+  if (!val) return new Date().toISOString().slice(0, 10);
+  if (typeof val === 'number') {
+    const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+    return d.toISOString().slice(0, 10);
   }
-
-  let computedMonth = rawMonth;
-  if (!computedMonth && lessonNum > 0) {
-    computedMonth = `Month ${Math.ceil(lessonNum / 4)}`;
+  const str = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  const dmy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmy) {
+    return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
   }
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
+}
 
-  return {
-    lesson_number: lessonNum > 0 ? lessonNum : null,
-    month: computedMonth || null,
-  };
+const calcMonthFromLesson = (val) => {
+  const num = parseInt(String(val || '').replace(/\D/g, ''), 10);
+  if (!num || num <= 0) return '';
+  return `Month ${Math.ceil(num / 4)}`;
 };
 
-export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, onImported }) {
-  const [file, setFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [previewData, setPreviewData] = useState([]);
-  const [errorMsg, setErrorMsg] = useState('');
+function parseLessonNumber(rawLesson, rawNotes) {
+  const directDigits = String(rawLesson ?? '').replace(/\D/g, '');
+  if (directDigits) return parseInt(directDigits, 10);
+
+  const noteStr = String(rawNotes ?? '');
+  const match = noteStr.match(/lesson\s*#?\s*(\d+)/i) || noteStr.match(/\bL(\d+)\b/i);
+  if (match && match[1]) return parseInt(match[1], 10);
+
+  return null;
+}
+
+export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors = [], existingAssignments = [], onImported }) {
+  const [rows, setRows] = useState([]);
+  const [fileName, setFileName] = useState('');
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef(null);
 
   const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
-    if (!selectedFile) return;
-
-    setErrorMsg('');
-    setFile(selectedFile);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
 
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const data = new Uint8Array(evt.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+        const bstr = evt.target.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsName = wb.SheetNames[0];
+        const ws = wb.Sheets[wsName];
+        const rawData = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-        const rawJson = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+        const mapped = rawData
+          .map((r, idx) => {
+            const keys = Object.keys(r);
+            const findVal = (candidates) => {
+              const k = keys.find((key) =>
+                candidates.some((c) => key.toLowerCase().trim() === c.toLowerCase())
+              );
+              return k ? r[k] : '';
+            };
 
-        if (!rawJson || rawJson.length === 0) {
-          setErrorMsg('File Excel kosong atau format tidak sesuai.');
-          setPreviewData([]);
-          return;
-        }
+            const className = String(findVal(['Class Name', 'Class', 'Group', 'Nama Kelas']) || '').trim();
+            const courseName = String(findVal(['Course Name', 'Course', 'Subject', 'Kursus']) || '').trim();
+            const rawTutor = String(findVal(['Tutor Name', 'Tutor', 'Teacher', 'Nama Tutor']) || '').trim();
+            const rawTutorId = String(findVal(['Tutor ID', 'tutor_id', 'ID Tutor']) || '').trim();
+            const studentCount = parseInt(findVal(['Student Count', 'Students', 'Jumlah Siswa']) || '1', 10) || 1;
+            const weekStart = parseDateSafe(findVal(['Period Start', 'Week Start', 'Start Date', 'Start', 'Mulai']));
+            const weekEnd = parseDateSafe(findVal(['Period End', 'Week End', 'End Date', 'End', 'Selesai']));
+            const rawNotes = String(findVal(['Notes', 'Note', 'Catatan']) || '').trim();
+            const rawLesson = findVal(['Lesson', 'Lesson Number', 'Lesson #', 'Pertemuan']);
+            const rawMonth = String(findVal(['Month', 'Bulan']) || '').trim();
 
-        const mappedData = rawJson
-          .map((row) => {
-            const rawCode = row['Class Code'] || row['class_code'] || '';
-            const parsedCode = !isNaN(rawCode) && rawCode !== '' ? parseInt(rawCode, 10) : null;
-            const { lesson_number, month } = extractLessonAndMonth(row);
-            const rawNotes = String(row['Notes'] || row['notes'] || '').trim();
-            const finalNotes =
-              rawNotes || (lesson_number ? `Lesson ${lesson_number} (${month})` : '');
+            const parsedLesson = parseLessonNumber(rawLesson, rawNotes);
+            const computedMonth = rawMonth || calcMonthFromLesson(parsedLesson);
+            const finalNotes = rawNotes || (parsedLesson ? `Lesson ${parsedLesson} (${computedMonth})` : '');
+
+            let matchedTutor = null;
+            if (rawTutorId) {
+              matchedTutor = tutors.find((t) => String(t.id).trim() === rawTutorId);
+            }
+            if (!matchedTutor && rawTutor) {
+              matchedTutor = tutors.find(
+                (t) =>
+                  (t.full_name || '').toLowerCase().trim() === rawTutor.toLowerCase() ||
+                  (t.username || '').toLowerCase().trim() === rawTutor.toLowerCase()
+              );
+            }
+
+            const isDuplicate = existingAssignments.some(
+              (ex) =>
+                (ex.class_name || '').toLowerCase().trim() === className.toLowerCase() &&
+                (ex.week_start_date || '').slice(0, 10) === weekStart
+            );
 
             return {
-              class_code: parsedCode,
-              class_name: String(row['Class Code'] || row['Class Name'] || row['class_name'] || '').trim(),
-              course_name: String(row['Course Name'] || row['course_name'] || '').trim(),
-              tutor_name: String(row['Tutor Name'] || row['tutor_name'] || '').trim(),
-              tutor_id: String(row['Tutor ID'] || row['tutor_id'] || '').trim(),
-              student_count: parseInt(row['Student Count'] || row['student_count'] || '1', 10) || 1,
-              lesson_number,
-              month,
-              week_start_date: String(row['Week Start'] || row['week_start_date'] || '').trim(),
-              week_end_date: String(row['Week End'] || row['week_end_date'] || '').trim(),
-              status: String(row['Status'] || row['status'] || 'pending').toLowerCase().trim(),
+              _idx: idx + 1,
+              class_name: className,
+              course_name: courseName || 'Visual Programming',
+              tutor_id: matchedTutor?.id || rawTutorId || '',
+              tutor_name: matchedTutor?.full_name || rawTutor || 'Unassigned',
+              student_count: studentCount,
+              lesson_number: parsedLesson,
+              month: computedMonth || null,
+              week_start_date: weekStart,
+              week_end_date: weekEnd,
               notes: finalNotes,
+              _matched: Boolean(matchedTutor),
+              _duplicate: isDuplicate,
+              _valid: Boolean(className),
             };
           })
-          .filter((item) => item.class_name);
+          .filter((item) => item.class_name || item.tutor_name !== 'Unassigned');
 
-        if (mappedData.length === 0) {
-          setErrorMsg('Tidak ada baris data kelas yang valid ditemukan di dalam file.');
-        } else {
-          setPreviewData(mappedData);
-        }
+        setRows(mapped);
       } catch (err) {
-        console.error('Error parsing Excel:', err);
-        setErrorMsg('Gagal membaca file Excel. Pastikan format file .xlsx valid.');
+        toast.error('Failed to read Excel file', { description: err.message });
       }
     };
-    reader.readAsArrayBuffer(selectedFile);
+    reader.readAsBinaryString(file);
   };
 
-  const handleConfirmImport = async () => {
-    if (!previewData.length) {
-      toast.error('No valid records to import');
-      return;
-    }
+  const validRows = rows.filter((r) => r._valid && !r._duplicate);
 
-    setLoading(true);
+  const handleImport = async () => {
+    if (validRows.length === 0) return;
+    setImporting(true);
     try {
-      const nowIso = new Date().toISOString();
-      const recordsToInsert = previewData.map((item) => ({
-        class_code: item.class_code,
-        class_name: item.class_name,
-        course_name: item.course_name,
-        tutor_name: item.tutor_name,
-        tutor_id: item.tutor_id || null,
-        student_count: item.student_count,
-        lesson_number: item.lesson_number,
-        month: item.month,
-        week_start_date: item.week_start_date || nowIso.slice(0, 10),
-        week_end_date: item.week_end_date || nowIso.slice(0, 10),
-        status: ['pending', 'completed', 'overdue'].includes(item.status) ? item.status : 'pending',
-        notes: item.notes,
-        created_date: nowIso,
-        updated_date: nowIso,
+      const now = new Date().toISOString();
+      const payload = validRows.map(({ _idx, _matched, _duplicate, _valid, ...rest }) => ({
+        ...rest,
+        status: 'pending',
+        created_date: now,
+        updated_date: now,
       }));
 
-      let { error } = await supabase.from('WeeklyFeedbackAssignment').insert(recordsToInsert);
-
+      let { error } = await supabase.from('WeeklyFeedbackAssignment').insert(payload);
       if (error && /lesson_number|month/i.test(error.message)) {
-        const fallbackRecords = recordsToInsert.map(({ lesson_number, month, ...rest }) => rest);
-        ({ error } = await supabase.from('WeeklyFeedbackAssignment').insert(fallbackRecords));
+        const fallbackPayload = payload.map(({ lesson_number, month, ...rest }) => rest);
+        ({ error } = await supabase.from('WeeklyFeedbackAssignment').insert(fallbackPayload));
       }
-
       if (error) throw error;
 
-      toast.success('Import Successful', {
-        description: `Berhasil mengimpor ${recordsToInsert.length} data monthly student feedback.`
-      });
+      // Push Telegram notification summary per connected active tutor
+      triggerTelegramNotification('monthly_feedback_assigned', payload);
 
-      resetState();
+      toast.success(`Imported ${payload.length} monthly feedback assignments!`);
+      setRows([]);
+      setFileName('');
       onOpenChange(false);
       if (onImported) onImported();
     } catch (err) {
-      console.error('Import Error:', err);
-      toast.error('Import Failed', { description: err.message || 'Gagal menyimpan data ke database.' });
+      toast.error('Import failed', { description: err.message });
     } finally {
-      setLoading(false);
+      setImporting(false);
     }
   };
 
-  const resetState = () => {
-    setFile(null);
-    setPreviewData([]);
-    setErrorMsg('');
-  };
-
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) resetState(); onOpenChange(v); }}>
-      <DialogContent className="bg-card border-border max-w-lg">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-card border-border max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-foreground">
-            <FileSpreadsheet className="w-5 h-5 text-chart-3" /> Import monthly student feedback
+          <DialogTitle className="flex items-center gap-2">
+            <FileSpreadsheet className="w-5 h-5 text-primary" />
+            Import Monthly Feedback Assignments (Excel / CSV)
           </DialogTitle>
-          <DialogDescription>
-            Upload a filled .xlsx file (supports optional <strong>Lesson</strong> column to auto-assign Month 1, Month 2, etc.).
-          </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {!file ? (
-            <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-2xl p-8 cursor-pointer hover:bg-secondary/40 transition-colors">
-              <Upload className="w-8 h-8 text-muted-foreground mb-2" />
-              <span className="text-sm font-medium text-foreground">Choose an .xlsx file</span>
-              <span className="text-xs text-muted-foreground mt-1">Monthly_Student_Feedback_Template.xlsx</span>
-              <input
-                type="file"
-                accept=".xlsx, .xls"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-            </label>
-          ) : (
-            <div className="bg-secondary/50 border border-border rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500" /> {file.name}
+        <div className="space-y-4 overflow-y-auto pr-1">
+          <div
+            onClick={() => fileRef.current?.click()}
+            className="border-2 border-dashed border-border hover:border-primary/50 rounded-xl p-6 text-center cursor-pointer transition-colors bg-secondary/20"
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <Upload className="w-8 h-8 text-primary mx-auto mb-2" />
+            <p className="text-sm font-medium text-foreground">
+              {fileName ? fileName : 'Click to upload Excel (.xlsx, .xls) or CSV file'}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Supported columns: Class Name, Course Name, Tutor Name, Tutor ID, Lesson, Month, Period Start, Period End, Student Count, Notes
+            </p>
+          </div>
+
+          {rows.length > 0 && (
+            <>
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/30">
+                    {validRows.length} Ready to Import
+                  </Badge>
+                  {rows.filter((r) => r._duplicate).length > 0 && (
+                    <Badge variant="outline" className="bg-amber-500/10 text-amber-500 border-amber-500/30">
+                      {rows.filter((r) => r._duplicate).length} Duplicates Skipped
+                    </Badge>
+                  )}
                 </div>
-                <Button variant="ghost" size="sm" onClick={resetState} className="h-7 text-xs text-muted-foreground hover:text-foreground">
-                  Change File
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setRows([]);
+                    setFileName('');
+                  }}
+                  className="h-7 text-xs gap-1"
+                >
+                  <X className="w-3.5 h-3.5" /> Clear
                 </Button>
               </div>
 
-              {previewData.length > 0 && (
-                <div className="text-xs text-muted-foreground">
-                  Found <strong className="text-foreground">{previewData.length}</strong> valid assignment row(s) ready to import.
-                </div>
-              )}
-            </div>
+              <div className="border border-border rounded-xl overflow-x-auto max-h-72">
+                <table className="w-full text-xs">
+                  <thead className="bg-secondary/60 text-muted-foreground sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Class</th>
+                      <th className="text-left px-3 py-2">Course</th>
+                      <th className="text-left px-3 py-2">Lesson / Month</th>
+                      <th className="text-left px-3 py-2">Tutor</th>
+                      <th className="text-left px-3 py-2">Period</th>
+                      <th className="text-left px-3 py-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {rows.map((r) => (
+                      <tr key={r._idx} className={r._duplicate ? 'opacity-50 bg-amber-500/5' : ''}>
+                        <td className="px-3 py-2 font-medium">{r.class_name || '—'}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{r.course_name}</td>
+                        <td className="px-3 py-2">
+                          {r.lesson_number ? (
+                            <span className="font-medium text-primary">
+                              L{r.lesson_number} ({r.month})
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">{r.notes || '—'}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={r._matched ? 'text-foreground' : 'text-amber-500'}>
+                            {r.tutor_name}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground">
+                          {r.week_start_date} → {r.week_end_date}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r._duplicate ? (
+                            <span className="inline-flex items-center gap-1 text-amber-500">
+                              <AlertCircle className="w-3 h-3" /> Duplicate
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-emerald-500">
+                              <CheckCircle2 className="w-3 h-3" /> Ready
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
+        </div>
 
-          {errorMsg && (
-            <div className="bg-destructive/15 border border-destructive/30 rounded-xl p-3 flex items-start gap-2 text-xs text-destructive">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <p className="text-xs text-muted-foreground">
-            Classes are taken from your existing class records; a class that is not listed yet is added automatically. Existing assignments are never overwritten.
-          </p>
-
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="outline" onClick={() => { resetState(); onOpenChange(false); }} className="border-border">
-              Cancel
-            </Button>
-            <Button
-              onClick={handleConfirmImport}
-              disabled={loading || !previewData.length}
-              className="bg-primary text-primary-foreground gap-2"
-            >
-              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              Import Assignments
-            </Button>
-          </div>
+        <div className="flex justify-end gap-2 pt-3 border-t border-border">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={handleImport} disabled={importing || validRows.length === 0}>
+            {importing && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+            Import {validRows.length} Assignment{validRows.length === 1 ? '' : 's'}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

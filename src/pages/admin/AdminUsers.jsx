@@ -13,10 +13,13 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, Search, Camera, Loader2, Filter, X, Eye, EyeOff, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react';
+import {
+  Plus, Pencil, Trash2, Search, Camera, Loader2, Filter, X,
+  Eye, EyeOff, ArrowUp, ArrowDown, ExternalLink, CheckCircle2, Clock
+} from 'lucide-react';
 import { toast } from 'sonner';
 import DeleteConfirmDialog from '@/components/ui/DeleteConfirmDialog';
-import { supabase } from '@/lib/supabaseClient'; // Integrasi Supabase Storage untuk foto profil
+import { supabase } from '@/lib/supabaseClient';
 
 const ROLES = ['Head of Retention', 'Head of Tutor', 'QC Team', 'Feedback Team', 'Team Leader', 'Tutor'];
 
@@ -104,6 +107,7 @@ export default function AdminUsers() {
   const [search, setSearch] = useState('');
   const [filterRole, setFilterRole] = useState('all');
   const [filterActive, setFilterActive] = useState('all');
+  const [filterTelegram, setFilterTelegram] = useState('all');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -114,14 +118,17 @@ export default function AdminUsers() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(10); // 10 data per halaman
+  const [itemsPerPage] = useState(10);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [sortOrder, setSortOrder] = useState('asc');
 
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
-    const [u, c] = await Promise.all([db.entities.CustomUser.list(), db.entities.CourseCategory.list()]);
+    const [{ data: u }, c] = await Promise.all([
+      supabase.from('CustomUser').select('*'),
+      db.entities.CourseCategory.list()
+    ]);
     setUsers(u || []); 
     setCourses(c || []);
   };
@@ -162,7 +169,6 @@ export default function AdminUsers() {
     setPhotoPreview(URL.createObjectURL(file));
   };
 
-  // Upload foto langsung ke Supabase Storage
   const uploadPhotoToSupabase = async (file) => {
     try {
       const fileExt = file.name.split('.').pop();
@@ -182,7 +188,6 @@ export default function AdminUsers() {
       return urlData.publicUrl;
     } catch (err) {
       console.error('Error uploading photo:', err);
-      // Fallback ke mock upload jika Supabase storage belum terhubung
       const { file_url } = await db.integrations.Core.UploadFile({ file });
       return file_url || '';
     }
@@ -220,11 +225,13 @@ export default function AdminUsers() {
     const cleanRbac = { ...DEFAULT_RBAC, ...form.rbac };
     delete cleanRbac.qc_tutor;
 
+    const cleanTg = (form.telegram_account || '').trim().replace(/^@/, '');
     const data = {
       full_name: form.full_name,
       username: form.username,
       phone_number: form.phone_number,
-      telegram_account: form.telegram_account,
+      telegram_account: cleanTg,
+      telegram_username: cleanTg ? `@${cleanTg}` : null,
       email: form.email,
       role: form.role,
       taught_courses: ['Tutor', 'Team Leader'].includes(form.role) ? form.taught_courses : [],
@@ -249,14 +256,21 @@ export default function AdminUsers() {
     loadData();
   };
 
+  const activeTutors = users.filter((u) => ['Tutor', 'Team Leader'].includes(u.role) && u.is_active !== false);
+  const connectedActiveTutors = activeTutors.filter((u) => Boolean(u.telegram_chat_id));
+
   const filtered = users
     .filter(u => {
       const matchSearch = u.full_name?.toLowerCase().includes(search.toLowerCase()) || 
                           u.email?.toLowerCase().includes(search.toLowerCase()) || 
-                          u.username?.toLowerCase().includes(search.toLowerCase());
+                          u.username?.toLowerCase().includes(search.toLowerCase()) ||
+                          (u.telegram_username || u.telegram_account || '').toLowerCase().includes(search.toLowerCase());
       const matchRole = filterRole === 'all' || u.role === filterRole;
       const matchActive = filterActive === 'all' || (filterActive === 'active' ? u.is_active !== false : u.is_active === false);
-      return matchSearch && matchRole && matchActive;
+      const matchTg =
+        filterTelegram === 'all' ||
+        (filterTelegram === 'connected' ? Boolean(u.telegram_chat_id) : !u.telegram_chat_id);
+      return matchSearch && matchRole && matchActive && matchTg;
     })
     .sort((a, b) => {
       const nameA = (a.full_name || '').toLowerCase();
@@ -264,22 +278,24 @@ export default function AdminUsers() {
       return sortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
     });
 
-  const hasFilters = filterRole !== 'all' || filterActive !== 'all';
+  const hasFilters = filterRole !== 'all' || filterActive !== 'all' || filterTelegram !== 'all';
   
-  // Pagination (10 item per halaman)
   const totalPages = Math.ceil(filtered.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
   const paginatedData = filtered.slice(startIndex, endIndex);
   
-  useEffect(() => { setCurrentPage(1); }, [search, filterRole, filterActive]);
+  useEffect(() => { setCurrentPage(1); }, [search, filterRole, filterActive, filterTelegram]);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-foreground">User Management</h2>
-          <p className="text-muted-foreground text-sm mt-0.5">Manage all user accounts and roles</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            Manage all user accounts and roles · Active Tutors connected to Telegram:{' '}
+            <strong className="text-foreground">{connectedActiveTutors.length}/{activeTutors.length}</strong>
+          </p>
         </div>
         <Button onClick={openCreate} className="bg-primary hover:bg-primary/90 gap-2">
           <Plus className="w-4 h-4" /> Add User
@@ -289,7 +305,7 @@ export default function AdminUsers() {
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, email, username..." className="pl-9 bg-muted border-border" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, email, username, telegram..." className="pl-9 bg-muted border-border" />
         </div>
         <Select value={filterRole} onValueChange={setFilterRole}>
           <SelectTrigger className="w-44 bg-muted border-border">
@@ -311,8 +327,18 @@ export default function AdminUsers() {
             <SelectItem value="inactive">Inactive</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={filterTelegram} onValueChange={setFilterTelegram}>
+          <SelectTrigger className="w-44 bg-muted border-border">
+            <SelectValue placeholder="Telegram Bot" />
+          </SelectTrigger>
+          <SelectContent className="bg-card border-border">
+            <SelectItem value="all">All Telegram</SelectItem>
+            <SelectItem value="connected">TG Connected</SelectItem>
+            <SelectItem value="not_connected">TG Not Connected</SelectItem>
+          </SelectContent>
+        </Select>
         {hasFilters && (
-          <Button variant="ghost" size="sm" onClick={() => { setFilterRole('all'); setFilterActive('all'); }} className="text-muted-foreground gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => { setFilterRole('all'); setFilterActive('all'); setFilterTelegram('all'); }} className="text-muted-foreground gap-1.5">
             <X className="w-3.5 h-3.5" /> Clear Filters
           </Button>
         )}
@@ -333,67 +359,90 @@ export default function AdminUsers() {
                   </button>
                 </th>
                 <th className="text-left px-5 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Role</th>
-                <th className="text-left px-5 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email</th>
+                <th className="text-left px-5 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Telegram Bot</th>
                 <th className="text-left px-5 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Link BO / Phone</th>
                 <th className="text-left px-5 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
                 <th className="text-right px-5 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {paginatedData.map(u => (
-                <tr key={u.id} className="hover:bg-secondary/50 transition-colors">
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      {u.photo_url ? (
-                        <img src={u.photo_url} className="w-9 h-9 rounded-xl object-cover" alt="" />
+              {paginatedData.map(u => {
+                const tgUser = u.telegram_username || (u.telegram_account ? `@${u.telegram_account.replace(/^@/, '')}` : '');
+                const isTgConnected = Boolean(u.telegram_chat_id);
+                const isUserActive = u.is_active !== false;
+                return (
+                  <tr key={u.id} className="hover:bg-secondary/50 transition-colors">
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        {u.photo_url ? (
+                          <img src={u.photo_url} className="w-9 h-9 rounded-xl object-cover" alt="" />
+                        ) : (
+                          <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center text-primary font-semibold text-sm">
+                            {u.full_name?.charAt(0)}
+                          </div>
+                        )}
+                        <div>
+                          <div className="font-medium text-foreground">{u.full_name}</div>
+                          {u.username && <div className="text-xs text-muted-foreground font-medium">@{u.username}</div>}
+                          {u.email && <div className="text-[11px] text-muted-foreground">{u.email}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <Badge className={
+                        u.role === 'Tutor' ? 'bg-accent/20 text-accent border-accent/30' :
+                        u.role === 'Team Leader' ? 'bg-chart-4/20 text-chart-4 border-chart-4/30' :
+                        u.role === 'Head of Retention' ? 'bg-primary/20 text-primary border-primary/30' :
+                        u.role === 'Head of Tutor' ? 'bg-chart-3/20 text-chart-3 border-chart-3/30' :
+                        'bg-secondary text-secondary-foreground border-border'
+                      } variant="outline">{u.role}</Badge>
+                    </td>
+                    <td className="px-5 py-4">
+                      {!isUserActive ? (
+                        <span className="text-xs text-muted-foreground italic">Inactive (paused)</span>
+                      ) : isTgConnected ? (
+                        <div className="space-y-0.5">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
+                            <CheckCircle2 className="w-3 h-3" /> Connected
+                          </span>
+                          {tgUser && <div className="text-xs text-muted-foreground">{tgUser}</div>}
+                        </div>
                       ) : (
-                        <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center text-primary font-semibold text-sm">
-                          {u.full_name?.charAt(0)}
+                        <div className="space-y-0.5">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-600 border border-amber-500/30">
+                            <Clock className="w-3 h-3" /> Not Connected
+                          </span>
+                          {tgUser && <div className="text-xs text-muted-foreground">{tgUser}</div>}
                         </div>
                       )}
-                      <div>
-                        <div className="font-medium text-foreground">{u.full_name}</div>
-                        {u.username && <div className="text-xs text-muted-foreground font-medium">@{u.username}</div>}
-                        {u.telegram_account && <div className="text-xs text-muted-foreground">TG: @{u.telegram_account}</div>}
+                    </td>
+                    <td className="px-5 py-4 text-sm text-muted-foreground">
+                      {u.link_bo ? (
+                        <a href={u.link_bo} target="_blank" rel="noreferrer" className="text-accent hover:underline flex items-center gap-1">
+                          <ExternalLink className="w-3 h-3" /> Link BO
+                        </a>
+                      ) : (
+                        <span>{u.phone_number || '—'}</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isUserActive ? 'bg-green-500/15 text-green-600' : 'bg-red-500/15 text-red-500'}`}>
+                        {isUserActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button size="sm" variant="ghost" onClick={() => openEdit(u)} className="w-8 h-8 p-0 hover:bg-primary/20 hover:text-primary">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleDelete(u.id)} className="w-8 h-8 p-0 hover:bg-destructive/20 hover:text-destructive">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
-                    </div>
-                  </td>
-                  <td className="px-5 py-4">
-                    <Badge className={
-                      u.role === 'Tutor' ? 'bg-accent/20 text-accent border-accent/30' :
-                      u.role === 'Team Leader' ? 'bg-chart-4/20 text-chart-4 border-chart-4/30' :
-                      u.role === 'Head of Retention' ? 'bg-primary/20 text-primary border-primary/30' :
-                      u.role === 'Head of Tutor' ? 'bg-chart-3/20 text-chart-3 border-chart-3/30' :
-                      'bg-secondary text-secondary-foreground border-border'
-                    } variant="outline">{u.role}</Badge>
-                  </td>
-                  <td className="px-5 py-4 text-sm text-muted-foreground">{u.email || '—'}</td>
-                  <td className="px-5 py-4 text-sm text-muted-foreground">
-                    {u.link_bo ? (
-                      <a href={u.link_bo} target="_blank" rel="noreferrer" className="text-accent hover:underline flex items-center gap-1">
-                        <ExternalLink className="w-3 h-3" /> Link BO
-                      </a>
-                    ) : (
-                      <span>{u.phone_number || '—'}</span>
-                    )}
-                  </td>
-                  <td className="px-5 py-4">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${u.is_active !== false ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'}`}>
-                      {u.is_active !== false ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(u)} className="w-8 h-8 p-0 hover:bg-primary/20 hover:text-primary">
-                        <Pencil className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => handleDelete(u.id)} className="w-8 h-8 p-0 hover:bg-destructive/20 hover:text-destructive">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
               {paginatedData.length === 0 && (
                 <tr><td colSpan={6} className="px-5 py-10 text-center text-muted-foreground">No users found</td></tr>
               )}
@@ -401,39 +450,20 @@ export default function AdminUsers() {
           </table>
         </div>
         
-        {/* Pagination Controls per 10 Data */}
         {totalPages > 1 && (
           <div className="border-t border-border px-5 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="text-sm text-muted-foreground">
               Showing {startIndex + 1} to {Math.min(endIndex, filtered.length)} of {filtered.length} entries
             </div>
             <div className="flex items-center gap-1.5 flex-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-                className="border-border text-xs"
-              >
-                First
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="border-border text-xs"
-              >
-                Previous
-              </Button>
-              
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="border-border text-xs">First</Button>
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className="border-border text-xs">Previous</Button>
               <div className="flex items-center gap-1">
                 {Array.from({ length: totalPages }, (_, i) => i + 1)
                   .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
                   .map((pageNum, idx, arr) => {
                     const prevPage = arr[idx - 1];
                     const showEllipsis = prevPage && pageNum - prevPage > 1;
-
                     return (
                       <React.Fragment key={pageNum}>
                         {showEllipsis && <span className="px-1 text-xs text-muted-foreground">...</span>}
@@ -449,25 +479,8 @@ export default function AdminUsers() {
                     );
                   })}
               </div>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="border-border text-xs"
-              >
-                Next
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-                className="border-border text-xs"
-              >
-                Last
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} disabled={currentPage === totalPages} className="border-border text-xs">Next</Button>
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="border-border text-xs">Last</Button>
             </div>
           </div>
         )}
@@ -603,7 +616,6 @@ export default function AdminUsers() {
               </div>
             </div>
 
-            {/* RBAC */}
             <div className="bg-secondary/50 rounded-xl p-4 space-y-4">
               <Label className="font-semibold text-foreground">Access Permissions (RBAC)</Label>
               <div className="space-y-4">

@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { triggerTelegramNotification } from '@/lib/telegramNotifier';
 
 const calcMonthFromLesson = (val) => {
   const num = parseInt(String(val || '').replace(/\D/g, ''), 10);
@@ -115,6 +116,9 @@ export default function AssignmentFormDialog({ open, onOpenChange, editing, tuto
           ({ error } = await supabase.from('WeeklyFeedbackAssignment').insert([fallbackPayload]));
         }
         if (error) throw error;
+
+        // Push Telegram notification to connected active tutor
+        triggerTelegramNotification('monthly_feedback_assigned', [payload]);
         toast.success('Assignment created');
       }
 

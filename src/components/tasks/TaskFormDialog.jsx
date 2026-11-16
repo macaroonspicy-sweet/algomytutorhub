@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { TASK_CATEGORIES, TASK_PRIORITIES, weekBounds } from '@/lib/workflowUtils';
 import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
+import { triggerTelegramNotification } from '@/lib/telegramNotifier';
 
 const EMPTY = {
   title: '', description: '', category: 'Student Feedback', priority: 'Medium',
@@ -44,7 +45,6 @@ export default function TaskFormDialog({ open, onOpenChange, tutors = [], onSave
       tutor_ids: f.tutor_ids.includes(id) ? f.tutor_ids.filter((t) => t !== id) : [...f.tutor_ids, id],
     }));
 
-  // Hanya ambil akun dengan role Tutor untuk opsi "Select All Tutors" (atau sesuaikan jika Team Leader juga masuk)
   const tutorOnlyList = tutors.filter((t) => t.role === 'Tutor');
   const selectablePool = tutorOnlyList.length > 0 ? tutorOnlyList : tutors;
   const allTutorIds = selectablePool.map((t) => t.id);
@@ -118,6 +118,9 @@ export default function TaskFormDialog({ open, onOpenChange, tutors = [], onSave
           created_by_id: assignerId,
         }));
         await supabase.from('TaskActivity').insert(activities);
+
+        // Push Telegram notification to connected active tutors
+        triggerTelegramNotification('task_assigned', insertedTasks);
       }
 
       const count = insertedTasks?.length || form.tutor_ids.length;
