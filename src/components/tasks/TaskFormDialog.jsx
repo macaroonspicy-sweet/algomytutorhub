@@ -6,10 +6,11 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Loader2, Link2 } from 'lucide-react';
+import { Loader2, Link2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { TASK_CATEGORIES, TASK_PRIORITIES, weekBounds } from '@/lib/workflowUtils';
-import { invokeService } from '@/lib/appApi';
+import { supabase } from '@/lib/supabaseClient';
+import { useAppAuth } from '@/lib/AppAuthContext';
 
 const EMPTY = {
   title: '', description: '', category: 'Student Feedback', priority: 'Medium',
@@ -17,7 +18,8 @@ const EMPTY = {
   linked_class_name: '',
 };
 
-export default function TaskFormDialog({ open, onOpenChange, tutors, onSaved }) {
+export default function TaskFormDialog({ open, onOpenChange, tutors = [], onSaved }) {
+  const { currentUser } = useAppAuth();
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [tutorSearch, setTutorSearch] = useState('');
@@ -25,48 +27,114 @@ export default function TaskFormDialog({ open, onOpenChange, tutors, onSaved }) 
   useEffect(() => {
     if (!open) return;
     const week = weekBounds();
-    setForm({ ...EMPTY, start_date: new Date().toISOString().slice(0, 10), linked_week_start_date: week.start, linked_week_end_date: week.end });
+    setForm({
+      ...EMPTY,
+      start_date: new Date().toISOString().slice(0, 10),
+      linked_week_start_date: week.start,
+      linked_week_end_date: week.end,
+    });
     setTutorSearch('');
   }, [open]);
 
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
 
-  const toggleTutor = (id) => setForm((f) => ({
-    ...f,
-    tutor_ids: f.tutor_ids.includes(id) ? f.tutor_ids.filter((t) => t !== id) : [...f.tutor_ids, id],
-  }));
+  const toggleTutor = (id) =>
+    setForm((f) => ({
+      ...f,
+      tutor_ids: f.tutor_ids.includes(id) ? f.tutor_ids.filter((t) => t !== id) : [...f.tutor_ids, id],
+    }));
+
+  // Hanya ambil akun dengan role Tutor untuk opsi "Select All Tutors" (atau sesuaikan jika Team Leader juga masuk)
+  const tutorOnlyList = tutors.filter((t) => t.role === 'Tutor');
+  const selectablePool = tutorOnlyList.length > 0 ? tutorOnlyList : tutors;
+  const allTutorIds = selectablePool.map((t) => t.id);
+  const isAllSelected = allTutorIds.length > 0 && allTutorIds.every((id) => form.tutor_ids.includes(id));
+
+  const handleToggleAllTutors = () => {
+    if (isAllSelected) {
+      set('tutor_ids', []);
+    } else {
+      set('tutor_ids', allTutorIds);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.title.trim()) { toast.error('Title is required'); return; }
     if (!form.tutor_ids.length) { toast.error('Select at least one tutor'); return; }
-    if (form.start_date && form.deadline && form.deadline < form.start_date) { toast.error('Deadline cannot be before the start date'); return; }
+    if (form.start_date && form.deadline && form.deadline < form.start_date) {
+      toast.error('Deadline cannot be before the start date');
+      return;
+    }
+
     setSaving(true);
     try {
-      const res = await invokeService('taskService', {
-        action: 'create',
-        title: form.title,
-        description: form.description,
-        category: form.category,
-        priority: form.priority,
-        start_date: form.start_date,
-        deadline: form.deadline,
-        tutor_ids: form.tutor_ids,
-        linked_week_start_date: form.linked ? form.linked_week_start_date : '',
-        linked_week_end_date: form.linked ? form.linked_week_end_date : '',
-        linked_class_name: form.category === 'QC Submission' ? form.linked_class_name : '',
+      const nowIso = new Date().toISOString();
+      const groupId = crypto.randomUUID ? crypto.randomUUID() : `grp_${Date.now()}`;
+      const assignerId = currentUser?.id ? String(currentUser.id) : null;
+      const assignerName = currentUser?.full_name || currentUser?.name || 'Team Leader';
+
+      const rowsToInsert = form.tutor_ids.map((tutorId) => {
+        const tutorObj = tutors.find((t) => String(t.id) === String(tutorId));
+        return {
+          group_id: groupId,
+          title: form.title.trim(),
+          description: form.description.trim() || null,
+          category: form.category,
+          priority: form.priority,
+          start_date: form.start_date || null,
+          deadline: form.deadline || null,
+          status: 'pending',
+          assigned_tutor_id: String(tutorId),
+          assigned_tutor_name: tutorObj?.full_name || tutorObj?.name || 'Tutor',
+          assigned_by_id: assignerId,
+          assigned_by_name: assignerName,
+          linked_week_start_date: form.linked ? form.linked_week_start_date : null,
+          linked_week_end_date: form.linked ? form.linked_week_end_date : null,
+          linked_class_name: form.category === 'QC Submission' ? form.linked_class_name.trim() || null : null,
+          created_date: nowIso,
+          updated_date: nowIso,
+          created_by_id: assignerId,
+        };
       });
-      if (res.data?.error) throw new Error(res.data.error);
-      toast.success(`Task assigned to ${res.data.created} tutor${res.data.created === 1 ? '' : 's'}`);
+
+      const { data: insertedTasks, error } = await supabase
+        .from('TutorTask')
+        .insert(rowsToInsert)
+        .select();
+
+      if (error) throw error;
+
+      if (insertedTasks?.length) {
+        const activities = insertedTasks.map((task) => ({
+          task_id: task.id,
+          action: 'assigned',
+          actor_id: assignerId,
+          actor_name: assignerName,
+          actor_role: currentUser?.role || 'Team Leader',
+          to_status: 'pending',
+          note: `Assigned to ${task.assigned_tutor_name}`,
+          created_date: nowIso,
+          updated_date: nowIso,
+          created_by_id: assignerId,
+        }));
+        await supabase.from('TaskActivity').insert(activities);
+      }
+
+      const count = insertedTasks?.length || form.tutor_ids.length;
+      toast.success(`Task assigned to ${count} tutor${count === 1 ? '' : 's'}`);
       onSaved?.();
       onOpenChange(false);
     } catch (err) {
-      toast.error('Could not assign task', { description: err?.response?.data?.error || err.message });
+      console.error('Create task error:', err);
+      toast.error('Could not assign task', { description: err.message });
     } finally {
       setSaving(false);
     }
   };
 
-  const visibleTutors = tutors.filter((t) => t.full_name?.toLowerCase().includes(tutorSearch.toLowerCase()));
+  const visibleTutors = tutors.filter((t) =>
+    (t.full_name || t.name || '').toLowerCase().includes(tutorSearch.toLowerCase())
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -131,19 +199,33 @@ export default function TaskFormDialog({ open, onOpenChange, tutors, onSaved }) 
           </div>
 
           <div className="space-y-2">
-            <Label className="text-sm text-foreground/80">Assign to *</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-sm text-foreground/80">Assign to *</Label>
+              <Button
+                type="button"
+                size="sm"
+                variant={isAllSelected ? 'secondary' : 'outline'}
+                onClick={handleToggleAllTutors}
+                disabled={allTutorIds.length === 0}
+                className="h-7 px-2.5 text-xs gap-1.5 border-border"
+              >
+                <Users className="w-3.5 h-3.5" />
+                {isAllSelected ? 'Unselect All' : `Select All Tutors (${allTutorIds.length})`}
+              </Button>
+            </div>
+
             <Input value={tutorSearch} onChange={(e) => setTutorSearch(e.target.value)} placeholder="Search tutors..." className="bg-muted border-border h-9" />
             <div className="max-h-44 overflow-y-auto border border-border rounded-xl divide-y divide-border">
               {visibleTutors.length === 0 && <div className="px-3 py-4 text-sm text-muted-foreground">No tutors found.</div>}
               {visibleTutors.map((t) => (
                 <label key={t.id} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-secondary/40">
                   <Checkbox checked={form.tutor_ids.includes(t.id)} onCheckedChange={() => toggleTutor(t.id)} />
-                  <span className="text-sm text-foreground">{t.full_name}</span>
+                  <span className="text-sm text-foreground">{t.full_name || t.name}</span>
                   <span className="text-xs text-muted-foreground ml-auto">{t.role}</span>
                 </label>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">{form.tutor_ids.length} selected</p>
+            <p className="text-xs text-muted-foreground">{form.tutor_ids.length} of {tutors.length} selected</p>
           </div>
 
           <div className="bg-secondary/40 border border-border rounded-xl p-3 space-y-3">

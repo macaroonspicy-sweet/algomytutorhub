@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2, Send, RotateCcw, History, CalendarDays, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { fmtDate, isTaskOverdue, PRIORITY_META, TASK_STATUS_META } from '@/lib/workflowUtils';
-import { invokeService } from '@/lib/appApi';
+import { supabase } from '@/lib/supabaseClient';
+import { useAppAuth } from '@/lib/AppAuthContext';
 
 const ACTION_LABELS = {
   assigned: 'Assigned', reassigned: 'Reassigned', status_changed: 'Status changed',
@@ -17,6 +18,7 @@ const ACTION_LABELS = {
 };
 
 export default function TaskDetailDialog({ open, onOpenChange, task, mode = 'manage', tutors = [], onChanged }) {
+  const { currentUser } = useAppAuth();
   const [history, setHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [status, setStatus] = useState('');
@@ -28,74 +30,199 @@ export default function TaskDetailDialog({ open, onOpenChange, task, mode = 'man
   const [completion, setCompletion] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const loadHistory = async (taskId) => {
+    setLoadingHistory(true);
+    try {
+      const { data, error } = await supabase
+        .from('TaskActivity')
+        .select('*')
+        .eq('task_id', taskId)
+        .order('created_date', { ascending: false });
+      if (error) throw error;
+      setHistory(data || []);
+    } catch {
+      setHistory([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   useEffect(() => {
     if (!open || !task) return;
-    setStatus(task.status);
+    setStatus(task.status || 'pending');
     setDeadline(task.deadline?.slice(0, 10) || '');
     setTutorId(task.assigned_tutor_id || '');
     setRevision('');
     setComment('');
     setProgress(task.progress_notes || '');
     setCompletion(task.completion_notes || '');
-    setLoadingHistory(true);
-    invokeService('taskService', { action: 'history', task_id: task.id })
-      .then((res) => setHistory(res.data?.items || []))
-      .catch(() => setHistory([]))
-      .finally(() => setLoadingHistory(false));
+    loadHistory(task.id);
   }, [open, task]);
 
-  const refresh = async (message) => {
-    toast.success(message);
-    await onChanged?.();
-    const res = await invokeService('taskService', { action: 'history', task_id: task.id });
-    setHistory(res.data?.items || []);
+  const logActivities = async (logs) => {
+    if (!logs.length) return;
+    const nowIso = new Date().toISOString();
+    const actorId = currentUser?.id ? String(currentUser.id) : null;
+    const actorName = currentUser?.full_name || currentUser?.name || 'User';
+    const actorRole = currentUser?.role || (mode === 'manage' ? 'Team Leader' : 'Tutor');
+
+    const payload = logs.map((l) => ({
+      task_id: task.id,
+      action: l.action,
+      actor_id: actorId,
+      actor_name: actorName,
+      actor_role: actorRole,
+      from_status: l.from_status || null,
+      to_status: l.to_status || null,
+      note: l.note || null,
+      created_date: nowIso,
+      updated_date: nowIso,
+      created_by_id: actorId,
+    }));
+
+    await supabase.from('TaskActivity').insert(payload);
   };
 
-  const run = async (payload, message) => {
+  const saveManager = async () => {
+    const updates = {};
+    const logs = [];
+    const nowIso = new Date().toISOString();
+
+    if (status && status !== task.status) {
+      updates.status = status;
+      if (status === 'completed') updates.completed_at = nowIso;
+      if (task.status === 'completed' && status !== 'completed') {
+        updates.completed_at = null;
+        logs.push({ action: 'reopened', from_status: task.status, to_status: status });
+      } else {
+        logs.push({ action: 'status_changed', from_status: task.status, to_status: status });
+      }
+    }
+
+    if (deadline && deadline !== (task.deadline?.slice(0, 10) || '')) {
+      updates.deadline = deadline;
+      logs.push({ action: 'deadline_changed', note: `New deadline: ${fmtDate(deadline)}` });
+    }
+
+    if (tutorId && String(tutorId) !== String(task.assigned_tutor_id)) {
+      const targetTutor = tutors.find((t) => String(t.id) === String(tutorId));
+      const newTutorName = targetTutor?.full_name || targetTutor?.name || 'Tutor';
+      updates.assigned_tutor_id = String(tutorId);
+      updates.assigned_tutor_name = newTutorName;
+      logs.push({ action: 'reassigned', note: `Reassigned to ${newTutorName}` });
+    }
+
+    if (!Object.keys(updates).length) {
+      toast.info('Nothing to update');
+      return;
+    }
+
+    updates.updated_date = nowIso;
     setSaving(true);
     try {
-      const res = await invokeService('taskService', payload);
-      if (res.data?.error) throw new Error(res.data.error);
-      await refresh(message);
-      return res.data?.task;
+      const { error } = await supabase.from('TutorTask').update(updates).eq('id', task.id);
+      if (error) throw error;
+      await logActivities(logs);
+      toast.success('Task updated');
+      await onChanged?.();
+      await loadHistory(task.id);
     } catch (err) {
-      toast.error('Could not update task', { description: err?.response?.data?.error || err.message });
-      return null;
+      toast.error('Could not update task', { description: err.message });
     } finally {
       setSaving(false);
     }
   };
 
-  const saveManager = async () => {
-    const fields = {};
-    if (status !== task.status) fields.status = status;
-    if (deadline && deadline !== (task.deadline?.slice(0, 10) || '')) fields.deadline = deadline;
-    const payload = { action: 'update', task_id: task.id, fields };
-    if (tutorId && tutorId !== task.assigned_tutor_id) payload.tutor_id = tutorId;
-    if (!Object.keys(fields).length && !payload.tutor_id) { toast.info('Nothing to update'); return; }
-    await run(payload, 'Task updated');
-  };
-
   const requestRevision = async () => {
     if (!revision.trim()) { toast.error('Describe the revision needed'); return; }
-    await run({ action: 'update', task_id: task.id, revision_note: revision.trim() }, 'Revision requested');
-    setRevision('');
+    setSaving(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase
+        .from('TutorTask')
+        .update({
+          status: 'in_progress',
+          revision_requested: true,
+          revision_note: revision.trim(),
+          updated_date: nowIso,
+        })
+        .eq('id', task.id);
+
+      if (error) throw error;
+      await logActivities([{
+        action: 'revision_requested',
+        from_status: task.status,
+        to_status: 'in_progress',
+        note: revision.trim(),
+      }]);
+      setRevision('');
+      toast.success('Revision requested');
+      await onChanged?.();
+      await loadHistory(task.id);
+    } catch (err) {
+      toast.error('Could not request revision', { description: err.message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const addComment = async () => {
     if (!comment.trim()) return;
-    await run({ action: 'update', task_id: task.id, comment: comment.trim() }, 'Comment added');
-    setComment('');
+    setSaving(true);
+    try {
+      await logActivities([{ action: 'comment', note: comment.trim() }]);
+      setComment('');
+      toast.success('Comment added');
+      await loadHistory(task.id);
+    } catch (err) {
+      toast.error('Could not add comment', { description: err.message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const saveTutor = async () => {
-    await run({
-      action: 'updateMine',
-      task_id: task.id,
-      status,
-      progress_notes: progress,
-      completion_notes: completion,
-    }, 'Task updated');
+    setSaving(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const updates = {
+        status,
+        progress_notes: progress,
+        completion_notes: completion,
+        updated_date: nowIso,
+      };
+      if (status === 'completed') {
+        updates.completed_at = nowIso;
+        updates.revision_requested = false;
+      }
+
+      const { error } = await supabase.from('TutorTask').update(updates).eq('id', task.id);
+      if (error) throw error;
+
+      const logs = [];
+      if (status !== task.status) {
+        logs.push({
+          action: 'status_changed',
+          from_status: task.status,
+          to_status: status,
+          note: completion.trim() || progress.trim() || null,
+        });
+      } else if (progress !== (task.progress_notes || '') || completion !== (task.completion_notes || '')) {
+        logs.push({
+          action: 'comment',
+          note: completion.trim() || progress.trim(),
+        });
+      }
+
+      await logActivities(logs);
+      toast.success('Task updated');
+      await onChanged?.();
+      await loadHistory(task.id);
+    } catch (err) {
+      toast.error('Could not update task', { description: err.message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!task) return null;
@@ -176,7 +303,7 @@ export default function TaskDetailDialog({ open, onOpenChange, task, mode = 'man
                   <Select value={tutorId} onValueChange={setTutorId}>
                     <SelectTrigger className="bg-muted border-border"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {tutors.map((t) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+                      {tutors.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.full_name || t.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -252,7 +379,7 @@ export default function TaskDetailDialog({ open, onOpenChange, task, mode = 'man
                       </div>
                       {entry.note && <div className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap">{entry.note}</div>}
                       <div className="text-[10px] text-muted-foreground/70 mt-0.5">
-                        {entry.actor_name} · {new Date(entry.created_date).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        {entry.actor_name} · {entry.created_date ? new Date(entry.created_date).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                       </div>
                     </div>
                   </li>

@@ -2,40 +2,51 @@ import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAppAuth } from '@/lib/AppAuthContext';
 import {
-  LayoutDashboard, Users, MessageSquare, BookOpen,
+  LayoutDashboard, MessageSquare, BookOpen,
   CheckSquare, ChevronDown, ChevronRight,
-  LogOut, User, Menu, ClipboardList, CalendarCheck, BarChart3
+  LogOut, User, Menu, ClipboardList, BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import NotificationBell from '@/components/NotificationBell';
 
 const navItems = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/', rbac: 'dashboard' },
-  { key: 'admin', label: 'User List', icon: Users, path: '/admin/users', rbac: 'admin_crud' },
-  { key: 'student-feedback', label: 'Student Feedback', icon: MessageSquare, path: '/student-feedback', rbac: 'student_feedback' },
-  { key: 'weekly-feedback', label: 'Weekly Feedback', icon: CalendarCheck, path: '/weekly-feedback', rbac: 'weekly_feedback' },
-  { key: 'tasks', label: 'Task Management', icon: ClipboardList, path: '/tasks', rbac: 'task_management' },
   { key: 'tutor-admin', label: 'Tutor Administration', icon: BarChart3, path: '/tutor-admin', rbac: 'task_management' },
+  { key: 'tasks', label: 'Task Management', icon: ClipboardList, path: '/tasks', rbac: 'task_management' },
   {
-    key: 'qc', 
-    label: 'QC Tutor', 
-    icon: CheckSquare, 
+    key: 'feedback',
+    label: 'Feedback',
+    icon: MessageSquare,
+    rbac: ['weekly_feedback', 'student_feedback'],
+    children: [
+      { label: 'Monthly Feedback', path: '/weekly-feedback', rbac: 'weekly_feedback' },
+      { label: 'Student Feedback', path: '/student-feedback', rbac: 'student_feedback' },
+    ],
+  },
+  {
+    key: 'qc',
+    label: 'QC Tutor',
+    icon: CheckSquare,
     children: [
       { label: 'QC Records', path: '/admin/qc-tutor', rbac: 'qc_records' },
       { label: 'Monthly Evaluation', path: '/admin/qc-monthly', rbac: 'qc_monthly' },
       { label: 'QC Submissions', path: '/qc/submissions' },
-    ]
+      { label: 'My QC Results', path: '/my-qc', rbac: 'my_qc' },
+    ],
   },
   {
-    key: 'categories', label: 'Categories', icon: BookOpen,
-    rbac: ['category_courses', 'category_qc', 'category_module', 'pdf_settings'],
+    key: 'master-users',
+    label: 'Master & Users',
+    icon: BookOpen,
+    rbac: ['admin_crud', 'category_courses', 'category_qc', 'category_module', 'pdf_settings'],
     children: [
+      { label: 'User List', path: '/admin/users', rbac: 'admin_crud' },
       { label: 'Courses', path: '/categories/courses', rbac: 'category_courses' },
       { label: 'QC Aspects', path: '/categories/qc-aspects', rbac: 'category_qc' },
       { label: 'Module', path: '/categories/module', rbac: 'category_module' },
       { label: 'Student Performance', path: '/categories/student-performance', rbac: 'category_module' },
       { label: 'PDF Settings', path: '/categories/pdf-settings', rbac: 'pdf_settings' },
-    ]
+    ],
   },
 ];
 
@@ -106,9 +117,8 @@ function NavItem({ item, collapsed, openKey, onToggle }) {
 }
 
 export default function Layout() {
-  const { currentUser, logout, hasPermission } = useAppAuth();
+  const { currentUser, logout } = useAppAuth();
   const navigate = useNavigate();
-  const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -140,20 +150,6 @@ export default function Layout() {
         {navItems.map(item => (
           <NavItem key={item.key} item={item} collapsed={collapsed} openKey={openNavKey} onToggle={handleNavToggle} />
         ))}
-        {hasPermission('my_qc') && (
-          <Link
-            to="/my-qc"
-            className={cn(
-              'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
-              location.pathname === '/my-qc'
-                ? 'bg-primary/10 text-primary font-semibold'
-                : 'text-sidebar-foreground hover:bg-secondary hover:text-foreground'
-            )}
-          >
-            <ClipboardList className="w-4 h-4 flex-shrink-0" />
-            {!collapsed && <span>My QC Results</span>}
-          </Link>
-        )}
       </nav>
 
       <div className="px-3 pb-4 space-y-1 border-t border-border pt-4">

@@ -1,7 +1,6 @@
-// src/components/tasks/TutorTasksPanel.jsx
 import React, { useEffect, useState } from 'react';
 import { useAppAuth } from '@/lib/AppAuthContext';
-import { invokeService } from '@/lib/appApi';
+import { supabase } from '@/lib/supabaseClient';
 import { ListChecks, Loader2, AlertTriangle, Clock, ChevronRight } from 'lucide-react';
 import TaskDetailDialog from '@/components/tasks/TaskDetailDialog';
 import { daysUntil, fmtDate, isTaskOverdue, PRIORITY_META, TASK_STATUS_META } from '@/lib/workflowUtils';
@@ -16,20 +15,27 @@ export default function TutorTasksPanel() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await invokeService('taskService', { action: 'list' });
-      const items = res.data?.items || [];
-      
-      // Safe matching: Case-insensitive ID compare + Full Name fallback
+      const { data, error } = await supabase
+        .from('TutorTask')
+        .select('*')
+        .order('created_date', { ascending: false });
+
+      if (error) throw error;
+      const items = data || [];
+
       const mine = items.filter((t) => {
         const currentId = String(currentUser?.id || '').trim().toLowerCase();
         const assignedId = String(t.assigned_tutor_id || '').trim().toLowerCase();
         const matchId = assignedId && currentId && assignedId === currentId;
-        const matchName = t.assigned_tutor_name?.toLowerCase().trim() === currentUser?.full_name?.toLowerCase().trim();
+        const matchName =
+          t.assigned_tutor_name?.toLowerCase().trim() ===
+          (currentUser?.full_name || currentUser?.name || '').toLowerCase().trim();
         return matchId || matchName;
       });
 
       setTasks(mine);
-    } catch {
+    } catch (err) {
+      console.error('Error loading tutor tasks:', err);
       setTasks([]);
     } finally {
       setLoading(false);

@@ -14,7 +14,6 @@ import TaskDetailDialog from '@/components/tasks/TaskDetailDialog';
 import ExportDialog from '@/components/export/ExportDialog';
 import Pagination from '@/components/ui/pagination';
 import { daysUntil, fmtDate, isTaskOverdue, PRIORITY_META, TASK_CATEGORIES, TASK_PRIORITIES, TASK_STATUS_META } from '@/lib/workflowUtils';
-import { invokeService } from '@/lib/appApi';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -54,31 +53,39 @@ export default function Tasks() {
 
   const load = async () => {
     try {
-      const [res, usersRes] = await Promise.all([
-        invokeService('taskService', { action: 'list' }),
+      const [tasksRes, usersRes] = await Promise.all([
+        supabase
+          .from('TutorTask')
+          .select('*')
+          .order('created_date', { ascending: false }),
         supabase
           .from('CustomUser')
           .select('id, full_name, role, is_active')
           .in('role', ['Tutor', 'Team Leader'])
           .order('full_name', { ascending: true }),
       ]);
-      if (res.data?.error) throw new Error(res.data.error);
+
+      if (tasksRes.error) throw tasksRes.error;
       if (usersRes.error) throw usersRes.error;
 
-      setTasks(res.data.items || []);
+      const taskList = tasksRes.data || [];
+      setTasks(taskList);
       setTutors((usersRes.data || []).filter((u) => u.is_active !== false));
-      return res.data.items || [];
+      return taskList;
     } catch (err) {
-      toast.error('Could not load tasks', { description: err?.response?.data?.error || err.message });
+      toast.error('Could not load tasks', { description: err.message });
+      return [];
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { if (currentUser?.id) load(); }, [currentUser?.id]);
+  useEffect(() => {
+    if (currentUser?.id) load();
+  }, [currentUser?.id]);
 
   const filtered = tasks.filter((task) => {
-    if (tutor !== 'all' && task.assigned_tutor_id !== tutor) return false;
+    if (tutor !== 'all' && String(task.assigned_tutor_id) !== String(tutor)) return false;
     if (priority !== 'all' && task.priority !== priority) return false;
     if (category !== 'all' && task.category !== category) return false;
     if (status === 'overdue' && !isTaskOverdue(task)) return false;
@@ -97,7 +104,9 @@ export default function Tasks() {
     return (a.assigned_tutor_name || '').localeCompare(b.assigned_tutor_name || '');
   });
 
-  useEffect(() => { setPage(1); }, [search, tutor, status, priority, category, sort]);
+  useEffect(() => {
+    setPage(1);
+  }, [search, tutor, status, priority, category, sort]);
 
   const totalPages = Math.ceil(sorted.length / ITEMS_PER_PAGE);
   const paginated = sorted.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
@@ -107,21 +116,35 @@ export default function Tasks() {
   const completedCount = count((t) => t.status === 'completed');
   const completionPct = total ? Math.round((completedCount / total) * 100) : 0;
 
-  const monitoring = Object.values(filtered.reduce((acc, task) => {
-    const key = task.assigned_tutor_id || 'unknown';
-    if (!acc[key]) {
-      acc[key] = { id: key, name: task.assigned_tutor_name || 'Unknown', total: 0, pending: 0, in_progress: 0, completed: 0, need_assistance: 0, overdue: 0 };
-    }
-    acc[key].total += 1;
-    if (task.status === 'need_assistance') acc[key].need_assistance += 1;
-    else if (task.status === 'in_progress') acc[key].in_progress += 1;
-    else if (task.status === 'completed') acc[key].completed += 1;
-    else if (task.status === 'pending') acc[key].pending += 1;
-    if (isTaskOverdue(task)) acc[key].overdue += 1;
-    return acc;
-  }, {})).sort((a, b) => b.total - a.total);
+  const monitoring = Object.values(
+    filtered.reduce((acc, task) => {
+      const key = task.assigned_tutor_id || task.assigned_tutor_name || 'unknown';
+      if (!acc[key]) {
+        acc[key] = {
+          id: key,
+          name: task.assigned_tutor_name || 'Unknown',
+          total: 0,
+          pending: 0,
+          in_progress: 0,
+          completed: 0,
+          need_assistance: 0,
+          overdue: 0,
+        };
+      }
+      acc[key].total += 1;
+      if (task.status === 'need_assistance') acc[key].need_assistance += 1;
+      else if (task.status === 'in_progress') acc[key].in_progress += 1;
+      else if (task.status === 'completed') acc[key].completed += 1;
+      else if (task.status === 'pending') acc[key].pending += 1;
+      if (isTaskOverdue(task)) acc[key].overdue += 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b.total - a.total);
 
-  const openTask = (task) => { setSelected(task); setDetailOpen(true); };
+  const openTask = (task) => {
+    setSelected(task);
+    setDetailOpen(true);
+  };
 
   if (!canView) {
     return (
@@ -222,7 +245,7 @@ export default function Tasks() {
             <SelectTrigger className="lg:w-40"><SelectValue placeholder="Tutor" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All tutors</SelectItem>
-              {tutors.map((t) => <SelectItem key={t.id} value={t.id}>{t.full_name}</SelectItem>)}
+              {tutors.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.full_name}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={status} onValueChange={setStatus}>
