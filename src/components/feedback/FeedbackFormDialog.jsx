@@ -328,6 +328,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
     !!form.class_code?.trim() &&
     !!form.tutor_id &&
     Number(form.point) > 0 &&
+    !!form.project_link?.trim() &&
     !!form.presence &&
     !!form.involvement_difficulty &&
     !!form.task_completion;
@@ -357,6 +358,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
     const saveForm = {
       ...form,
       student_name: studentName,
+      project_link: form.project_link.trim(),
       presence: bakePerf(form.presence),
       involvement_difficulty: bakePerf(form.involvement_difficulty),
       task_completion: bakePerf(form.task_completion),
@@ -474,7 +476,7 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
     e.preventDefault();
     if (!requiredComplete) {
       toast.error('Incomplete Form', {
-        description: 'Please ensure Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task Completion are filled in.',
+        description: 'Please ensure Student Name, Course, Month, Class Code, Rating Star, Project Link, Presence, Involvement, & Task Completion are filled in.',
       });
       return;
     }
@@ -624,9 +626,15 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
             <StarPointInput value={form.point} onChange={v => set('point', v)} />
           </Field>
 
-          {/* Project Link */}
-          <Field label="Project (Link)">
-            <Input value={form.project_link} onChange={e => set('project_link', e.target.value)} placeholder="https://..." className="bg-muted border-border" />
+          {/* Project Link (Required) */}
+          <Field label="Project (Link) *">
+            <Input
+              value={form.project_link}
+              onChange={e => set('project_link', e.target.value)}
+              placeholder="https://..."
+              required
+              className="bg-muted border-border"
+            />
           </Field>
 
           {/* Module Topic */}
@@ -743,8 +751,8 @@ export default function FeedbackFormDialog({ open, onOpenChange, editing, proces
           {/* Section Action / Submit Button */}
           <div className="flex flex-col items-end gap-2 pt-2 pb-4">
             {!requiredComplete && (
-              <p className="text-xs text-amber-400 text-right font-medium">
-                ⚠️ Please complete all required fields (*) such as Student Name, Course, Month, Class Code, Rating Star, Presence, Involvement, & Task.
+              <p className="text-xs text-amber-600 text-right font-medium">
+                ⚠️ Please complete all required fields (*) including Student Name, Course, Month, Class Code, Rating Star, Project Link, Presence, Involvement, & Task.
               </p>
             )}
             <div className="flex flex-wrap justify-end gap-2.5 w-full sm:w-auto">
