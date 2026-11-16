@@ -390,11 +390,11 @@ export default function AdminUsers() {
                     </td>
                     <td className="px-5 py-4">
                       <Badge className={
-                        u.role === 'Tutor' ? 'bg-accent/20 text-accent border-accent/30' :
-                        u.role === 'Team Leader' ? 'bg-chart-4/20 text-chart-4 border-chart-4/30' :
-                        u.role === 'Head of Retention' ? 'bg-primary/20 text-primary border-primary/30' :
-                        u.role === 'Head of Tutor' ? 'bg-chart-3/20 text-chart-3 border-chart-3/30' :
-                        'bg-secondary text-secondary-foreground border-border'
+                        u.role === 'Tutor' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 font-medium' :
+                        u.role === 'Team Leader' ? 'bg-amber-50 text-amber-700 border-amber-200 font-medium' :
+                        u.role === 'Head of Retention' ? 'bg-primary/15 text-primary border-primary/30 font-medium' :
+                        u.role === 'Head of Tutor' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 font-medium' :
+                        'bg-secondary text-secondary-foreground border-border font-medium'
                       } variant="outline">{u.role}</Badge>
                     </td>
                     <td className="px-5 py-4">
@@ -416,13 +416,18 @@ export default function AdminUsers() {
                         </div>
                       )}
                     </td>
-                    <td className="px-5 py-4 text-sm text-muted-foreground">
+                    <td className="px-5 py-4 text-sm">
                       {u.link_bo ? (
-                        <a href={u.link_bo} target="_blank" rel="noreferrer" className="text-accent hover:underline flex items-center gap-1">
+                        <a
+                          href={u.link_bo}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-primary/10 text-primary border border-primary/25 hover:bg-primary/20 transition-colors"
+                        >
                           <ExternalLink className="w-3 h-3" /> Link BO
                         </a>
                       ) : (
-                        <span>{u.phone_number || '—'}</span>
+                        <span className="text-muted-foreground">{u.phone_number || '—'}</span>
                       )}
                     </td>
                     <td className="px-5 py-4">
