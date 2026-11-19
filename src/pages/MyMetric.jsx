@@ -57,8 +57,9 @@ const isSameTutor = (a, b) => {
 };
 
 const normalizeAttendanceStatus = (status) => {
-  if (status === 'Hadir' || status === 'Present') return 'Present';
-  if (status === 'Ijin' || status === 'Excused') return 'Excused';
+  const val = String(status || '').trim().toLowerCase();
+  if (val === 'present') return 'Present';
+  if (val === 'excused') return 'Excused';
   return 'Absent';
 };
 
@@ -175,8 +176,7 @@ export default function MyMetric() {
       if (a.is_sample) return false;
       if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
       const matchUser = (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName);
-      if (!matchUser) return false;
-      if (!isLessonFourMultiple(a)) return false;
+      if (!matchUser || !isLessonFourMultiple(a)) return false;
 
       if (a.week_start_date) {
         const [ay, am] = a.week_start_date.split('-');
@@ -400,7 +400,7 @@ export default function MyMetric() {
               <div className="text-2xl font-bold text-foreground mt-2">
                 {personalStats.attendancePct !== null ? `${personalStats.attendancePct.toFixed(2)}%` : '-'}
               </div>
-              <div className="text-[11px] text-muted-foreground mt-1">Updated every Tuesday</div>
+              <div className="text-[11px] text-muted-foreground mt-1">Updated Weekly</div>
             </div>
 
             <div className="bg-card border border-border rounded-2xl p-5">

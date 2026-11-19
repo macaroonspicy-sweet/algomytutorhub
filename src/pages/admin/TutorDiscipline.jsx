@@ -279,7 +279,17 @@ export default function TutorDiscipline() {
           status,
         };
       })
-      .sort((a, b) => a.teacherName.localeCompare(b.teacherName));
+      .sort((a, b) => {
+        if (a.disciplinePct === null && b.disciplinePct === null) {
+          return a.teacherName.localeCompare(b.teacherName);
+        }
+        if (a.disciplinePct === null) return 1;
+        if (b.disciplinePct === null) return -1;
+        if (b.disciplinePct !== a.disciplinePct) {
+          return b.disciplinePct - a.disciplinePct;
+        }
+        return a.teacherName.localeCompare(b.teacherName);
+      });
   }, [
     tutors,
     scheduleRecords,
@@ -462,7 +472,7 @@ export default function TutorDiscipline() {
             Tutor Discipline
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Updated weekly (every Tuesday) • Synced from Completed Classes, Monthly Feedback (Lesson 4 multiples), and QC Meeting Presence.
+            Updated weekly • Synced from Completed Classes, Monthly Feedback (Lesson 4 multiples), and QC Meeting Presence.
           </p>
         </div>
 
@@ -521,7 +531,7 @@ export default function TutorDiscipline() {
         <div className="bg-card border border-border rounded-2xl p-4">
           <div className="text-xs font-medium text-muted-foreground">Active Tutors</div>
           <div className="text-2xl font-bold text-foreground mt-1">{disciplineRows.length}</div>
-          <div className="text-[11px] text-muted-foreground mt-0.5">Sorted alphabetically A–Z</div>
+          <div className="text-[11px] text-muted-foreground mt-0.5">Ranked by Discipline %</div>
         </div>
 
         <div className="bg-card border border-border rounded-2xl p-4">

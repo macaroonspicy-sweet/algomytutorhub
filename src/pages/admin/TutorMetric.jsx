@@ -264,15 +264,15 @@ export default function TutorMetric() {
       // D. Complaint
       const complaint = '-';
 
-      // E. Overall Composite Score & Status Classification
-      const availableMetrics = [attendancePct, disciplinePct, qualityScore].filter((v) => v !== null);
-      const compositeScore =
-        availableMetrics.length > 0
-          ? availableMetrics.reduce((a, b) => a + b, 0) / availableMetrics.length
-          : -1;
+      // E. Overall Composite Score = (Attendance + Discipline + Quality) / 3
+      const hasAnyMetric =
+        attendancePct !== null || disciplinePct !== null || qualityScore !== null;
+      const compositeScore = hasAnyMetric
+        ? ((attendancePct ?? 0) + (disciplinePct ?? 0) + (qualityScore ?? 0)) / 3
+        : -1;
 
       let status = 'No result';
-      if (availableMetrics.length > 0) {
+      if (hasAnyMetric) {
         if (compositeScore >= 90) status = 'High Performer';
         else if (compositeScore >= 80) status = 'Stable Performer';
         else if (compositeScore >= 70) status = 'Need Improvement';
@@ -342,6 +342,7 @@ export default function TutorMetric() {
         Attendance: r.attendancePct !== null ? `${r.attendancePct.toFixed(2)}%` : 'No attendance',
         Discipline: r.disciplinePct !== null ? `${r.disciplinePct.toFixed(2)}%` : 'No discipline',
         'Quality (QC)': r.qualityScore !== null ? r.qualityScore : 'No Quality',
+        'Final Score': r.compositeScore >= 0 ? r.compositeScore.toFixed(2) : '-',
         Complaint: r.complaint,
         Status: r.status,
       }));
@@ -366,7 +367,7 @@ export default function TutorMetric() {
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Quality updated monthly (based on last month&apos;s QC result) • Attendance &amp; Discipline updated weekly (every Tuesday).
+            Quality updated monthly (based on last month&apos;s QC result) • Attendance &amp; Discipline updated weekly.
           </p>
         </div>
 
@@ -381,10 +382,13 @@ export default function TutorMetric() {
             <Info className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
             <div className="text-xs text-muted-foreground space-y-1">
               <div>
+                <strong className="text-foreground">Formula:</strong> (Attendance + Discipline + Quality) ÷ 3
+              </div>
+              <div>
                 <strong className="text-foreground">Quality (QC):</strong> Updated monthly (based on last month&apos;s QC result)
               </div>
               <div>
-                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly (every Tuesday)
+                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly 
               </div>
             </div>
           </div>
