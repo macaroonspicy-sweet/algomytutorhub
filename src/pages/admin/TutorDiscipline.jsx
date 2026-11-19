@@ -597,7 +597,9 @@ export default function TutorDiscipline() {
                       <td className="px-4 py-3 text-center text-xs font-medium text-muted-foreground">
                         {idx + 1}
                       </td>
-                      <td className="px-4 py-3 font-medium text-foreground">{row.teacherName}</td>
+                      <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">
+                        {row.teacherName}
+                      </td>
                       <td className="px-4 py-3 text-center font-semibold text-foreground">
                         {row.completedClasses}
                       </td>
@@ -607,25 +609,25 @@ export default function TutorDiscipline() {
                       <td className="px-4 py-3 text-center text-muted-foreground">
                         {row.feedbackTarget > 0 ? row.feedbackTarget : '-'}
                       </td>
-                      <td className="px-4 py-3 text-center text-xs font-medium text-foreground">
+                      <td className="px-4 py-3 text-center text-xs font-medium text-foreground whitespace-nowrap">
                         {row.meetingSummaryText}
                       </td>
-                      <td className="px-4 py-3 text-center font-bold text-primary">
+                      <td className="px-4 py-3 text-center font-bold text-primary whitespace-nowrap">
                         {row.disciplinePct !== null ? `${row.disciplinePct}%` : '-'}
                       </td>
-                      <td className="px-4 py-3 text-right text-xs">
+                      <td className="px-4 py-3 text-right text-xs whitespace-nowrap">
                         {row.status === '-' ? (
                           <span className="text-muted-foreground">-</span>
                         ) : row.status === 'High Performer' ? (
-                          <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
                             {row.status}
                           </span>
                         ) : row.status === 'Stable Performer' ? (
-                          <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-200">
                             {row.status}
                           </span>
                         ) : (
-                          <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200">
                             {row.status}
                           </span>
                         )}
@@ -674,17 +676,17 @@ export default function TutorDiscipline() {
                         </td>
                         <td className="px-4 py-3 text-foreground">{m.topic}</td>
                         <td className="px-4 py-3 text-center">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
+                          <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
                             {hadir}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
+                          <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
                             {ijin}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700">
+                          <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700">
                             {tidakHadir}
                           </span>
                         </td>
@@ -766,13 +768,13 @@ export default function TutorDiscipline() {
 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
+                <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Hadir: {modalCounts.hadir}
                 </span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium border border-amber-200">
+                <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium border border-amber-200">
                   <Clock className="w-3.5 h-3.5" /> Ijin: {modalCounts.ijin}
                 </span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-medium border border-rose-200">
+                <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-medium border border-rose-200">
                   <XCircle className="w-3.5 h-3.5" /> Tidak Hadir: {modalCounts.tidakHadir}
                 </span>
               </div>
@@ -812,10 +814,10 @@ export default function TutorDiscipline() {
                     return (
                       <tr key={t.id} className="hover:bg-secondary/20">
                         <td className="px-3 py-2 text-xs text-muted-foreground">{idx + 1}</td>
-                        <td className="px-3 py-2 font-medium text-foreground">
+                        <td className="px-3 py-2 font-medium text-foreground whitespace-nowrap">
                           {t.full_name || t.username}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 whitespace-nowrap">
                           <div className="inline-flex rounded-lg border border-border p-0.5 bg-secondary/40">
                             {['Hadir', 'Ijin', 'Tidak Hadir'].map((opt) => {
                               const active = entry.status === opt;
@@ -830,7 +832,7 @@ export default function TutorDiscipline() {
                                   key={opt}
                                   type="button"
                                   onClick={() => handleStatusChange(t.id, opt)}
-                                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${cls}`}
+                                  className={`px-2.5 py-1 text-xs font-medium rounded-md whitespace-nowrap transition ${cls}`}
                                 >
                                   {opt}
                                 </button>
@@ -897,10 +899,12 @@ export default function TutorDiscipline() {
                   .map((rec, i) => (
                     <tr key={rec.id}>
                       <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
-                      <td className="px-3 py-2 font-medium text-foreground">{rec.tutor_name}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 font-medium text-foreground whitespace-nowrap">
+                        {rec.tutor_name}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
                         <span
-                          className={`px-2 py-0.5 rounded-full font-semibold ${
+                          className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full font-semibold ${
                             rec.status === 'Hadir'
                               ? 'bg-emerald-50 text-emerald-700'
                               : rec.status === 'Ijin'

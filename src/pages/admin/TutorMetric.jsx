@@ -254,11 +254,9 @@ export default function TutorMetric() {
 
       let status = 'No result';
       if (availableMetrics.length > 0) {
-        // Primary status follows QC & overall composite threshold
-        const refScore = qualityScore !== null ? compositeScore : compositeScore;
-        if (refScore >= 90) status = 'High Performer';
-        else if (refScore >= 80) status = 'Stable Performer';
-        else if (refScore >= 70) status = 'Need Improvement';
+        if (compositeScore >= 90) status = 'High Performer';
+        else if (compositeScore >= 80) status = 'Stable Performer';
+        else if (compositeScore >= 70) status = 'Need Improvement';
         else status = 'Probation Candidate';
       }
 
@@ -352,7 +350,7 @@ export default function TutorMetric() {
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Quality updated monthly (based on last month&apos;s QC result) • Attendance &amp; Discipline updated weekly.
+            Quality updated monthly (based on last month&apos;s QC result) • Attendance &amp; Discipline updated weekly .
           </p>
         </div>
 
@@ -371,22 +369,22 @@ export default function TutorMetric() {
                 <strong className="text-foreground">Quality (QC):</strong> Updated monthly (based on last month&apos;s QC result)
               </div>
               <div>
-                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly
+                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly 
               </div>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+            <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
               90–100 = High Performer ({statusCounts.high})
             </span>
-            <span className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+            <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 font-semibold border border-blue-200">
               80–89 = Stable Performer ({statusCounts.stable})
             </span>
-            <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 font-semibold border border-amber-200">
+            <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 font-semibold border border-amber-200">
               70–79 = Need Improvement ({statusCounts.needImp})
             </span>
-            <span className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 font-semibold border border-rose-200">
+            <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 font-semibold border border-rose-200">
               &lt;70 = Probation Candidate ({statusCounts.probation})
             </span>
           </div>
@@ -492,36 +490,38 @@ export default function TutorMetric() {
                       <td className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground">
                         {idx + 1}
                       </td>
-                      <td className="px-4 py-3 font-medium text-foreground">{row.teacherName}</td>
+                      <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">
+                        {row.teacherName}
+                      </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                         {row.teamLeader}
                       </td>
-                      <td className="px-4 py-3 text-center text-xs">
+                      <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
                         {row.attendancePct !== null ? (
                           <span className="font-semibold text-foreground">
                             {row.attendancePct.toFixed(2)}%
                           </span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 font-medium">
+                          <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-md bg-rose-50 text-rose-600 font-medium">
                             No attendance
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center text-xs">
+                      <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
                         {row.disciplinePct !== null ? (
                           <span className="font-semibold text-foreground">
                             {row.disciplinePct.toFixed(2)}%
                           </span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 font-medium">
+                          <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-md bg-rose-50 text-rose-600 font-medium">
                             No discipline
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center text-xs">
+                      <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
                         {row.qualityScore !== null ? (
                           <span
-                            className={`px-2.5 py-0.5 rounded-md font-bold ${
+                            className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-md font-bold ${
                               row.qualityScore >= 90
                                 ? 'bg-emerald-50 text-emerald-700'
                                 : row.qualityScore >= 80
@@ -532,7 +532,7 @@ export default function TutorMetric() {
                             {row.qualityScore}
                           </span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 font-medium">
+                          <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-md bg-rose-50 text-rose-600 font-medium">
                             No Quality
                           </span>
                         )}
@@ -542,23 +542,23 @@ export default function TutorMetric() {
                       </td>
                       <td className="px-4 py-3 text-right text-xs whitespace-nowrap">
                         {row.status === 'High Performer' ? (
-                          <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
                             High Performer
                           </span>
                         ) : row.status === 'Stable Performer' ? (
-                          <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-200">
                             Stable Performer
                           </span>
                         ) : row.status === 'Need Improvement' ? (
-                          <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200">
                             Need Improvement
                           </span>
                         ) : row.status === 'Probation Candidate' ? (
-                          <span className="px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-semibold border border-rose-200">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-rose-50 text-rose-700 font-semibold border border-rose-200">
                             Probation Candidate
                           </span>
                         ) : (
-                          <span className="px-2.5 py-1 rounded-full bg-secondary text-muted-foreground font-medium">
+                          <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-secondary text-muted-foreground font-medium">
                             No result
                           </span>
                         )}
