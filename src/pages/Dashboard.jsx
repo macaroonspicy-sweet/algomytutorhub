@@ -147,7 +147,6 @@ export default function Dashboard() {
         statsData.myFeedbackRecords = fbRecs.filter((f) => f.tutor_id === currentUser.id).length;
       }
 
-      // Load personal Tutor Metric (Classes Conducted, Attendance %, Discipline %, Quality QC)
       if (['Tutor', 'Team Leader'].includes(currentUser?.role)) {
         try {
           const now = new Date();
@@ -173,7 +172,6 @@ export default function Dashboard() {
               supabase.from('TutorMeetingAttendance').select('meeting_id, tutor_id, tutor_name, status'),
             ]);
 
-          // 1. Classes Conducted & Attendance %
           const myConducted = (schedData || []).filter(
             (r) => !r.is_test_group && r.is_conducted && isSameTutor(r.lesson_teacher, tName)
           );
@@ -188,7 +186,6 @@ export default function Dashboard() {
                 )
               : null;
 
-          // 2. Discipline % (Lesson 4 multiples feedback compliance + QC Meeting presence with Excused = 0.75)
           const myAssignments = (fbAssignData || []).filter((a) => {
             if (a.is_sample) return false;
             if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
@@ -235,7 +232,6 @@ export default function Dashboard() {
               ? Number((discParts.reduce((a, b) => a + b, 0) / discParts.length).toFixed(2))
               : null;
 
-          // 3. Quality (QC) from previous month (Default SOP)
           const myQcs = (qcData || []).filter((q) => {
             if (q.is_sample || q.evaluation_score === null || q.evaluation_score === undefined) return false;
             const matchUser = (q.tutor_id && q.tutor_id === tId) || isSameTutor(q.tutor_name, tName);
@@ -246,19 +242,18 @@ export default function Dashboard() {
               ? Math.round(myQcs.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) / myQcs.length)
               : null;
 
-          // 4. Overall Status
-          const availableMetrics = [attendancePct, disciplinePct, qualityScore].filter((v) => v !== null);
-          const composite =
-            availableMetrics.length > 0
-              ? availableMetrics.reduce((a, b) => a + b, 0) / availableMetrics.length
-              : null;
+          const hasAnyMetric =
+            attendancePct !== null || disciplinePct !== null || qualityScore !== null;
+          const composite = hasAnyMetric
+            ? ((attendancePct ?? 0) + (disciplinePct ?? 0) + (qualityScore ?? 0)) / 3
+            : null;
 
           let status = 'No result';
           if (composite !== null) {
             if (composite >= 90) status = 'High Performer';
             else if (composite >= 80) status = 'Stable Performer';
             else if (composite >= 70) status = 'Need Improvement';
-            else status = 'Probation Candidate';
+            else status = 'Low Performance';
           }
 
           setMyMetric({
@@ -292,7 +287,6 @@ export default function Dashboard() {
         <p className="text-muted-foreground mt-1">Welcome back, {currentUser?.full_name || 'User'}</p>
       </div>
 
-      {/* Admin/Management Stats */}
       {isAdmin && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
@@ -411,7 +405,6 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* Tutor Dashboard Top KPI Cards + Read-Only Personal Metric Banner */}
       {isTutor && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -449,7 +442,6 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Read-Only Personal Tutor Metric Summary */}
           <div className="bg-card border border-border rounded-2xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="space-y-3 flex-1">
               <div className="flex flex-wrap items-center gap-2.5">
@@ -514,7 +506,7 @@ export default function Dashboard() {
                       ? 'bg-blue-50 text-blue-700 border-blue-200'
                       : myMetric.status === 'Need Improvement'
                       ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : myMetric.status === 'Probation Candidate'
+                      : myMetric.status === 'Low Performance'
                       ? 'bg-rose-50 text-rose-700 border-rose-200'
                       : 'bg-secondary text-muted-foreground border-border'
                   }`}
@@ -534,7 +526,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* My Tasks & My Student Feedback (Tutor / Team Leader) */}
       {['Tutor', 'Team Leader'].includes(currentUser?.role) && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <TutorTasksPanel />
@@ -542,10 +533,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* QC submission form */}
       {['Tutor', 'Team Leader'].includes(currentUser?.role) && <QCSubmissionPanel />}
 
-      {/* Role-based Quick Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {isAdmin && (
           <div className="bg-card border border-border rounded-2xl p-6">

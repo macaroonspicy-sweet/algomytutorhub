@@ -254,19 +254,19 @@ export default function MyMetric() {
         ? Math.round(myQcs.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) / myQcs.length)
         : null;
 
-    // 6. Overall Composite Score & Status
-    const availableMetrics = [attendancePct, disciplinePct, qualityScore].filter((v) => v !== null);
-    const compositeScore =
-      availableMetrics.length > 0
-        ? availableMetrics.reduce((a, b) => a + b, 0) / availableMetrics.length
-        : null;
+    // 6. Overall Composite Score = (Attendance + Discipline + Quality) / 3
+    const hasAnyMetric =
+      attendancePct !== null || disciplinePct !== null || qualityScore !== null;
+    const compositeScore = hasAnyMetric
+      ? ((attendancePct ?? 0) + (disciplinePct ?? 0) + (qualityScore ?? 0)) / 3
+      : null;
 
     let status = 'No result';
     if (compositeScore !== null) {
       if (compositeScore >= 90) status = 'High Performer';
       else if (compositeScore >= 80) status = 'Stable Performer';
       else if (compositeScore >= 70) status = 'Need Improvement';
-      else status = 'Probation Candidate';
+      else status = 'Low Performance';
     }
 
     return {
@@ -316,10 +316,10 @@ export default function MyMetric() {
         </span>
       );
     }
-    if (status === 'Probation Candidate') {
+    if (status === 'Low Performance') {
       return (
         <span className="inline-flex items-center whitespace-nowrap px-3.5 py-1.5 rounded-full bg-rose-50 text-rose-700 text-xs font-semibold border border-rose-200">
-          Probation Candidate
+          Low Performance
         </span>
       );
     }
@@ -400,7 +400,7 @@ export default function MyMetric() {
               <div className="text-2xl font-bold text-foreground mt-2">
                 {personalStats.attendancePct !== null ? `${personalStats.attendancePct.toFixed(2)}%` : '-'}
               </div>
-              <div className="text-[11px] text-muted-foreground mt-1">Updated Weekly</div>
+              <div className="text-[11px] text-muted-foreground mt-1">Updated every week</div>
             </div>
 
             <div className="bg-card border border-border rounded-2xl p-5">
@@ -467,7 +467,10 @@ export default function MyMetric() {
               </div>
 
               <div className="pt-2 border-t border-border">
-                <div className="text-xs font-semibold text-foreground mb-2">Performance Tiers</div>
+                <div className="text-xs font-semibold text-foreground mb-1">Performance Tiers</div>
+                <div className="text-[11px] text-muted-foreground mb-2">
+                  Formula: (Attendance + Discipline + Quality) ÷ 3
+                </div>
                 <div className="grid grid-cols-2 gap-1.5 text-[11px]">
                   <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
                     90–100: High Performer
@@ -479,7 +482,7 @@ export default function MyMetric() {
                     70–79: Need Improvement
                   </span>
                   <span className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 font-medium border border-rose-200">
-                    &lt;70: Probation Candidate
+                    &lt;70: Low Performance
                   </span>
                 </div>
               </div>

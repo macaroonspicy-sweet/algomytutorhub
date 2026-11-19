@@ -276,7 +276,7 @@ export default function TutorMetric() {
         if (compositeScore >= 90) status = 'High Performer';
         else if (compositeScore >= 80) status = 'Stable Performer';
         else if (compositeScore >= 70) status = 'Need Improvement';
-        else status = 'Probation Candidate';
+        else status = 'Low Performance';
       }
 
       return {
@@ -326,7 +326,7 @@ export default function TutorMetric() {
       high: metricRows.filter((r) => r.status === 'High Performer').length,
       stable: metricRows.filter((r) => r.status === 'Stable Performer').length,
       needImp: metricRows.filter((r) => r.status === 'Need Improvement').length,
-      probation: metricRows.filter((r) => r.status === 'Probation Candidate').length,
+      lowPerf: metricRows.filter((r) => r.status === 'Low Performance').length,
       noResult: metricRows.filter((r) => r.status === 'No result').length,
     };
   }, [metricRows]);
@@ -388,7 +388,7 @@ export default function TutorMetric() {
                 <strong className="text-foreground">Quality (QC):</strong> Updated monthly (based on last month&apos;s QC result)
               </div>
               <div>
-                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly 
+                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly
               </div>
             </div>
           </div>
@@ -404,7 +404,7 @@ export default function TutorMetric() {
               70–79 = Need Improvement ({statusCounts.needImp})
             </span>
             <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 font-semibold border border-rose-200">
-              &lt;70 = Probation Candidate ({statusCounts.probation})
+              &lt;70 = Low Performance ({statusCounts.lowPerf})
             </span>
           </div>
         </div>
@@ -467,7 +467,7 @@ export default function TutorMetric() {
             <SelectItem value="High Performer">High Performer ({statusCounts.high})</SelectItem>
             <SelectItem value="Stable Performer">Stable Performer ({statusCounts.stable})</SelectItem>
             <SelectItem value="Need Improvement">Need Improvement ({statusCounts.needImp})</SelectItem>
-            <SelectItem value="Probation Candidate">Probation Candidate ({statusCounts.probation})</SelectItem>
+            <SelectItem value="Low Performance">Low Performance ({statusCounts.lowPerf})</SelectItem>
             <SelectItem value="No result">No result ({statusCounts.noResult})</SelectItem>
           </SelectContent>
         </Select>
@@ -569,9 +569,9 @@ export default function TutorMetric() {
                           <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200">
                             Need Improvement
                           </span>
-                        ) : row.status === 'Probation Candidate' ? (
+                        ) : row.status === 'Low Performance' ? (
                           <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-rose-50 text-rose-700 font-semibold border border-rose-200">
-                            Probation Candidate
+                            Low Performance
                           </span>
                         ) : (
                           <span className="inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full bg-secondary text-muted-foreground font-medium">

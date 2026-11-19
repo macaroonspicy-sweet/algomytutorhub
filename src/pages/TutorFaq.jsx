@@ -50,7 +50,7 @@ const FAQ_SECTIONS = [
     items: [
       {
         q: 'How are my Tutor Metric scores calculated?',
-        a: 'Your overall performance is evaluated across three core pillars: (1) Attendance % (student attendance rate across your conducted classes), (2) Discipline % (timely submission of Lesson 4 multiple Monthly Student Feedback combined with QC Meeting attendance), and (3) Quality (QC) score from your monthly lesson evaluations.',
+        a: 'Your overall performance is evaluated across three core pillars: (1) Attendance % (student attendance rate across your conducted classes), (2) Discipline % (timely submission of Lesson 4 multiple Monthly Student Feedback combined with QC Meeting attendance), and (3) Quality (QC) score from your monthly lesson evaluations, combined using (Attendance + Discipline + Quality) ÷ 3.',
       },
       {
         q: 'How is QC Meeting attendance weighted in Discipline %?',
@@ -58,11 +58,11 @@ const FAQ_SECTIONS = [
       },
       {
         q: 'How often are Metric figures updated?',
-        a: 'Classes Conducted, Attendance %, and Discipline % are updated every Tuesday. Quality (QC) scores are updated monthly based on the previous month’s QC evaluation results.',
+        a: 'Classes Conducted, Attendance %, and Discipline % are updated every week. Quality (QC) scores are updated monthly based on the previous month’s QC evaluation results.',
       },
       {
         q: 'What do the Performance Status badges mean?',
-        a: '90–100 = High Performer | 80–89 = Stable Performer | 70–79 = Need Improvement | Below 70 = Probation Candidate.',
+        a: '90–100 = High Performer | 80–89 = Stable Performer | 70–79 = Need Improvement | Below 70 = Low Performance.',
       },
     ],
   },
@@ -129,7 +129,7 @@ export default function TutorFaq() {
       <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 flex items-start gap-3">
         <Bell className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
         <div className="text-xs text-muted-foreground leading-relaxed">
-          <strong className="text-foreground">Weekly Update Schedule:</strong> Attendance, Classes Conducted, and Discipline metrics are refreshed every <strong className="text-foreground">Tuesday</strong>, while Quality (QC) scores are updated <strong className="text-foreground">monthly</strong> based on your prior month&apos;s evaluation.
+          <strong className="text-foreground">Weekly Update Schedule:</strong> Attendance, Classes Conducted, and Discipline metrics are refreshed <strong className="text-foreground">Weekly</strong>, while Quality (QC) scores are updated <strong className="text-foreground">monthly</strong> based on your prior month&apos;s evaluation.
         </div>
       </div>
 
