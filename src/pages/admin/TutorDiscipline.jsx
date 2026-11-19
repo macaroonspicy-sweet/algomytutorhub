@@ -392,7 +392,7 @@ export default function TutorDiscipline() {
         meeting_id: createdMeeting.id,
         tutor_id: item.tutor_id,
         tutor_name: item.tutor_name,
-        status: item.status,
+        status: normalizeAttendanceStatus(item.status),
         notes: item.notes?.trim() || null,
       }));
 
