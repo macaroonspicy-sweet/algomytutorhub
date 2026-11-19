@@ -1,8 +1,8 @@
 import '@/api/base44Client';
-import { Toaster } from "@/components/ui/toaster"
-import { Toaster as SonnerToaster } from 'sonner'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { queryClientInstance } from '@/lib/query-client'
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from 'sonner';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClientInstance } from '@/lib/query-client';
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
@@ -19,6 +19,8 @@ import WeeklyFeedback from '@/pages/WeeklyFeedback';
 import QCSubmissions from '@/pages/QCSubmissions';
 import Tasks from '@/pages/Tasks';
 import TutorAdmin from '@/pages/TutorAdmin';
+import TutorMetric from '@/pages/admin/TutorMetric';
+import TutorDiscipline from '@/pages/admin/TutorDiscipline';
 import CoursesCategory from '@/pages/categories/CoursesCategory';
 
 import MyProfile from '@/pages/MyProfile';
@@ -84,6 +86,22 @@ const AuthenticatedApp = () => {
           <Route path="/qc/submissions" element={<RbacRoute rbacKey={['qc_records', 'my_qc']}><QCSubmissions /></RbacRoute>} />
           <Route path="/tasks" element={<RbacRoute rbacKey="task_management"><Tasks /></RbacRoute>} />
           <Route path="/tutor-admin" element={<RbacRoute rbacKey="task_management"><TutorAdmin /></RbacRoute>} />
+          <Route
+            path="/tutor-central/metric"
+            element={
+              <RbacRoute rbacKey={['task_management', 'qc_records', 'qc_monthly']}>
+                <TutorMetric />
+              </RbacRoute>
+            }
+          />
+          <Route
+            path="/tutor-central/discipline"
+            element={
+              <RbacRoute rbacKey={['task_management', 'qc_records', 'qc_monthly']}>
+                <TutorDiscipline />
+              </RbacRoute>
+            }
+          />
           <Route path="/categories/courses" element={<RbacRoute rbacKey="category_courses"><CoursesCategory /></RbacRoute>} />
 
           <Route path="/categories/module" element={<RbacRoute rbacKey="category_module"><ModuleCategoryPage /></RbacRoute>} />

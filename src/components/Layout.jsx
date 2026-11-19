@@ -4,7 +4,7 @@ import { useAppAuth } from '@/lib/AppAuthContext';
 import {
   LayoutDashboard, MessageSquare, BookOpen,
   CheckSquare, ChevronDown, ChevronRight,
-  LogOut, User, Menu, ClipboardList, BarChart3
+  LogOut, User, Menu, ClipboardList, BarChart3, Award
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import NotificationBell from '@/components/NotificationBell';
@@ -12,6 +12,16 @@ import NotificationBell from '@/components/NotificationBell';
 const navItems = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/', rbac: 'dashboard' },
   { key: 'tutor-admin', label: 'Tutor Administration', icon: BarChart3, path: '/tutor-admin', rbac: 'task_management' },
+  {
+    key: 'tutor-central',
+    label: 'Tutor Central',
+    icon: Award,
+    rbac: ['task_management', 'qc_records', 'qc_monthly'],
+    children: [
+      { label: 'Tutor Metric', path: '/tutor-central/metric', rbac: ['task_management', 'qc_records', 'qc_monthly'] },
+      { label: 'Discipline', path: '/tutor-central/discipline', rbac: ['task_management', 'qc_records', 'qc_monthly'] },
+    ],
+  },
   { key: 'tasks', label: 'Task Management', icon: ClipboardList, path: '/tasks', rbac: 'task_management' },
   {
     key: 'feedback',
@@ -50,15 +60,21 @@ const navItems = [
   },
 ];
 
+function checkRbac(rbac, hasPermission) {
+  if (!rbac) return true;
+  const keys = Array.isArray(rbac) ? rbac : [rbac];
+  return keys.some((k) => hasPermission(k));
+}
+
 function NavItem({ item, collapsed, openKey, onToggle }) {
   const location = useLocation();
   const { hasPermission } = useAppAuth();
 
   if (item.children) {
-    const visibleChildren = item.children.filter(c => !c.rbac || hasPermission(c.rbac));
+    const visibleChildren = item.children.filter((c) => checkRbac(c.rbac, hasPermission));
     if (visibleChildren.length === 0) return null;
 
-    const isAnyActive = visibleChildren.some(c => location.pathname === c.path);
+    const isAnyActive = visibleChildren.some((c) => location.pathname === c.path);
     const isOpen = openKey === item.key || isAnyActive;
     return (
       <div>
@@ -77,7 +93,7 @@ function NavItem({ item, collapsed, openKey, onToggle }) {
         </button>
         {isOpen && !collapsed && (
           <div className="ml-7 mt-1 space-y-1">
-            {visibleChildren.map(child => (
+            {visibleChildren.map((child) => (
               <Link
                 key={child.path}
                 to={child.path}
@@ -97,7 +113,7 @@ function NavItem({ item, collapsed, openKey, onToggle }) {
     );
   }
 
-  if (item.rbac && !hasPermission(item.rbac)) return null;
+  if (!checkRbac(item.rbac, hasPermission)) return null;
 
   const isActive = location.pathname === item.path;
   return (
@@ -128,7 +144,7 @@ export default function Layout() {
   };
 
   const [openNavKey, setOpenNavKey] = useState(null);
-  const handleNavToggle = (key) => setOpenNavKey(prev => prev === key ? null : key);
+  const handleNavToggle = (key) => setOpenNavKey((prev) => (prev === key ? null : key));
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-white">
@@ -147,8 +163,14 @@ export default function Layout() {
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {navItems.map(item => (
-          <NavItem key={item.key} item={item} collapsed={collapsed} openKey={openNavKey} onToggle={handleNavToggle} />
+        {navItems.map((item) => (
+          <NavItem
+            key={item.key}
+            item={item}
+            collapsed={collapsed}
+            openKey={openNavKey}
+            onToggle={handleNavToggle}
+          />
         ))}
       </nav>
 
@@ -191,10 +213,12 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      <aside className={cn(
-        'hidden md:flex flex-col bg-white border-r border-border transition-all duration-300 flex-shrink-0',
-        collapsed ? 'w-16' : 'w-64'
-      )}>
+      <aside
+        className={cn(
+          'hidden md:flex flex-col bg-white border-r border-border transition-all duration-300 flex-shrink-0',
+          collapsed ? 'w-16' : 'w-64'
+        )}
+      >
         <SidebarContent />
       </aside>
 
@@ -210,7 +234,7 @@ export default function Layout() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white border-b border-border px-4 py-3 flex items-center gap-3">
           <button
-            onClick={() => setCollapsed(c => !c)}
+            onClick={() => setCollapsed((c) => !c)}
             className="hidden md:flex items-center justify-center w-8 h-8 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-all"
           >
             <Menu className="w-4 h-4" />
