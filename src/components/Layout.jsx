@@ -2,9 +2,21 @@ import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAppAuth } from '@/lib/AppAuthContext';
 import {
-  LayoutDashboard, MessageSquare, BookOpen,
-  CheckSquare, ChevronDown, ChevronRight,
-  LogOut, User, Menu, ClipboardList, BarChart3, Award
+  LayoutDashboard,
+  MessageSquare,
+  BookOpen,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  LogOut,
+  User,
+  Menu,
+  ClipboardList,
+  BarChart3,
+  Award,
+  TrendingUp,
+  ExternalLink,
+  HelpCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import NotificationBell from '@/components/NotificationBell';
@@ -45,6 +57,28 @@ const navItems = [
     ],
   },
   {
+    key: 'my-metric',
+    label: 'My Metric',
+    icon: TrendingUp,
+    path: '/my-metric',
+    roles: ['Tutor', 'Team Leader'],
+  },
+  {
+    key: 'useful-links',
+    label: 'Useful Links',
+    icon: ExternalLink,
+    href: 'https://algo-my.netlify.app/',
+    external: true,
+    roles: ['Tutor', 'Team Leader'],
+  },
+  {
+    key: 'faq',
+    label: 'FAQ',
+    icon: HelpCircle,
+    path: '/faq',
+    roles: ['Tutor', 'Team Leader'],
+  },
+  {
     key: 'master-users',
     label: 'Master & Users',
     icon: BookOpen,
@@ -68,7 +102,30 @@ function checkRbac(rbac, hasPermission) {
 
 function NavItem({ item, collapsed, openKey, onToggle }) {
   const location = useLocation();
-  const { hasPermission } = useAppAuth();
+  const { hasPermission, currentUser } = useAppAuth();
+
+  if (item.roles && !item.roles.includes(currentUser?.role)) {
+    return null;
+  }
+
+  if (item.external && item.href) {
+    return (
+      <a
+        href={item.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-sidebar-foreground hover:bg-secondary hover:text-foreground transition-all duration-200"
+      >
+        <item.icon className="w-4 h-4 flex-shrink-0" />
+        {!collapsed && (
+          <span className="flex-1 flex items-center justify-between">
+            <span>{item.label}</span>
+            <ExternalLink className="w-3 h-3 text-muted-foreground" />
+          </span>
+        )}
+      </a>
+    );
+  }
 
   if (item.children) {
     const visibleChildren = item.children.filter((c) => checkRbac(c.rbac, hasPermission));

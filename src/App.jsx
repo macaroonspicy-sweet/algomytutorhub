@@ -21,6 +21,8 @@ import Tasks from '@/pages/Tasks';
 import TutorAdmin from '@/pages/TutorAdmin';
 import TutorMetric from '@/pages/admin/TutorMetric';
 import TutorDiscipline from '@/pages/admin/TutorDiscipline';
+import MyMetric from '@/pages/MyMetric';
+import TutorFaq from '@/pages/TutorFaq';
 import CoursesCategory from '@/pages/categories/CoursesCategory';
 
 import MyProfile from '@/pages/MyProfile';
@@ -102,6 +104,8 @@ const AuthenticatedApp = () => {
               </RbacRoute>
             }
           />
+          <Route path="/my-metric" element={<MyMetric />} />
+          <Route path="/faq" element={<TutorFaq />} />
           <Route path="/categories/courses" element={<RbacRoute rbacKey="category_courses"><CoursesCategory /></RbacRoute>} />
 
           <Route path="/categories/module" element={<RbacRoute rbacKey="category_module"><ModuleCategoryPage /></RbacRoute>} />
