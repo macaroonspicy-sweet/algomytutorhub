@@ -113,8 +113,11 @@ export default function TutorDiscipline() {
   const [modalSearch, setModalSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // View Meeting Detail Modal State
+  // View & Edit Meeting Detail Modal State
   const [selectedMeetingDetail, setSelectedMeetingDetail] = useState(null);
+  const [editAttendanceMap, setEditAttendanceMap] = useState({});
+  const [editModalSearch, setEditModalSearch] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const loadAllData = async () => {
     setLoading(true);
@@ -344,7 +347,7 @@ export default function TutorDiscipline() {
   const handleStatusChange = (tutorId, status) => {
     setAttendanceMap((prev) => ({
       ...prev,
-      [tutorId]: { ...prev[tutorId], status },
+      [tutorId]: { ...prev[tutorId], status: normalizeAttendanceStatus(status) },
     }));
   };
 
@@ -409,6 +412,68 @@ export default function TutorDiscipline() {
     }
   };
 
+  const openMeetingDetailModal = (meeting, records) => {
+    const map = {};
+    records.forEach((rec) => {
+      map[rec.id] = {
+        status: normalizeAttendanceStatus(rec.status),
+        notes: rec.notes || '',
+      };
+    });
+    setEditAttendanceMap(map);
+    setEditModalSearch('');
+    setSelectedMeetingDetail({ meeting, records });
+  };
+
+  const handleEditStatusChange = (recordId, status) => {
+    setEditAttendanceMap((prev) => ({
+      ...prev,
+      [recordId]: {
+        ...(prev[recordId] || { notes: '' }),
+        status: normalizeAttendanceStatus(status),
+      },
+    }));
+  };
+
+  const handleEditNotesChange = (recordId, notes) => {
+    setEditAttendanceMap((prev) => ({
+      ...prev,
+      [recordId]: {
+        ...(prev[recordId] || { status: 'Present' }),
+        notes,
+      },
+    }));
+  };
+
+  const handleSaveEditedAttendance = async () => {
+    if (!selectedMeetingDetail?.records?.length) return;
+    setSavingEdit(true);
+    try {
+      await Promise.all(
+        selectedMeetingDetail.records.map(async (rec) => {
+          const updated = editAttendanceMap[rec.id];
+          if (!updated) return;
+          const { error } = await supabase
+            .from('TutorMeetingAttendance')
+            .update({
+              status: normalizeAttendanceStatus(updated.status),
+              notes: updated.notes?.trim() || null,
+            })
+            .eq('id', rec.id);
+          if (error) throw error;
+        })
+      );
+
+      toast.success('Meeting attendance updated');
+      setSelectedMeetingDetail(null);
+      await loadAllData();
+    } catch (err) {
+      toast.error('Failed to update meeting attendance', { description: err.message });
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleDeleteMeeting = async (meetingId) => {
     if (!window.confirm('Delete this meeting attendance record?')) return;
     try {
@@ -462,6 +527,24 @@ export default function TutorDiscipline() {
     };
   }, [attendanceMap]);
 
+  const editModalCounts = useMemo(() => {
+    const vals = Object.values(editAttendanceMap);
+    return {
+      present: vals.filter((v) => v.status === 'Present').length,
+      excused: vals.filter((v) => v.status === 'Excused').length,
+      absent: vals.filter((v) => v.status === 'Absent').length,
+    };
+  }, [editAttendanceMap]);
+
+  const editFilteredRecords = useMemo(() => {
+    const sorted = (selectedMeetingDetail?.records || [])
+      .slice()
+      .sort((a, b) => (a.tutor_name || '').localeCompare(b.tutor_name || ''));
+    if (!editModalSearch.trim()) return sorted;
+    const q = editModalSearch.toLowerCase();
+    return sorted.filter((r) => (r.tutor_name || '').toLowerCase().includes(q));
+  }, [selectedMeetingDetail, editModalSearch]);
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -472,7 +555,7 @@ export default function TutorDiscipline() {
             Tutor Discipline
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Updated weekly • Synced from Completed Classes, Monthly Feedback (Lesson 4 multiples), and QC Meeting Presence.
+            Updated every week • Synced from Completed Classes, Monthly Feedback (Lesson 4 multiples), and QC Meeting Presence.
           </p>
         </div>
 
@@ -721,10 +804,10 @@ export default function TutorDiscipline() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setSelectedMeetingDetail({ meeting: m, records: recs })}
+                            onClick={() => openMeetingDetailModal(m, recs)}
                             className="h-8 text-xs gap-1"
                           >
-                            <Eye className="w-3.5 h-3.5" /> Details
+                            <Eye className="w-3.5 h-3.5" /> Details / Edit
                           </Button>
                           <Button
                             variant="ghost"
@@ -895,61 +978,119 @@ export default function TutorDiscipline() {
         </DialogContent>
       </Dialog>
 
-      {/* View Meeting Detail Modal */}
+      {/* View & Edit Meeting Detail Modal */}
       <Dialog
         open={Boolean(selectedMeetingDetail)}
         onOpenChange={(open) => !open && setSelectedMeetingDetail(null)}
       >
-        <DialogContent className="bg-card border-border max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogContent className="bg-card border-border max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle className="text-foreground">
               {selectedMeetingDetail?.meeting?.topic}
             </DialogTitle>
             <p className="text-xs text-muted-foreground">
-              Date: {selectedMeetingDetail?.meeting?.meeting_date}
+              Date: {selectedMeetingDetail?.meeting?.meeting_date} • Update attendance status or notes below if needed
             </p>
           </DialogHeader>
 
-          <div className="overflow-y-auto border border-border rounded-xl">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Present: {editModalCounts.present}
+              </span>
+              <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium border border-amber-200">
+                <Clock className="w-3.5 h-3.5" /> Excused: {editModalCounts.excused}
+              </span>
+              <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-medium border border-rose-200">
+                <XCircle className="w-3.5 h-3.5" /> Absent: {editModalCounts.absent}
+              </span>
+            </div>
+
+            <Input
+              placeholder="Search tutor..."
+              value={editModalSearch}
+              onChange={(e) => setEditModalSearch(e.target.value)}
+              className="h-8 text-xs w-44"
+            />
+          </div>
+
+          <div className="overflow-y-auto border border-border rounded-xl flex-1">
             <table className="w-full text-xs">
-              <thead className="bg-secondary/60 text-muted-foreground">
+              <thead className="bg-secondary/60 text-muted-foreground sticky top-0">
                 <tr className="text-left">
-                  <th className="px-3 py-2.5">#</th>
+                  <th className="px-3 py-2.5 w-10">#</th>
                   <th className="px-3 py-2.5">Tutor Name</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Notes</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {(selectedMeetingDetail?.records || [])
-                  .sort((a, b) => a.tutor_name.localeCompare(b.tutor_name))
-                  .map((rec, i) => {
-                    const statusLabel = normalizeAttendanceStatus(rec.status);
-                    return (
-                      <tr key={rec.id}>
-                        <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
-                        <td className="px-3 py-2 font-medium text-foreground whitespace-nowrap">
-                          {rec.tutor_name}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full font-semibold ${
-                              statusLabel === 'Present'
-                                ? 'bg-emerald-50 text-emerald-700'
-                                : statusLabel === 'Excused'
-                                ? 'bg-amber-50 text-amber-700'
-                                : 'bg-rose-50 text-rose-700'
-                            }`}
-                          >
-                            {statusLabel}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-muted-foreground">{rec.notes || '-'}</td>
-                      </tr>
-                    );
-                  })}
+                {editFilteredRecords.map((rec, i) => {
+                  const currentEdit = editAttendanceMap[rec.id] || {
+                    status: normalizeAttendanceStatus(rec.status),
+                    notes: rec.notes || '',
+                  };
+                  return (
+                    <tr key={rec.id} className="hover:bg-secondary/20">
+                      <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
+                      <td className="px-3 py-2 font-medium text-foreground whitespace-nowrap">
+                        {rec.tutor_name}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="inline-flex rounded-lg border border-border p-0.5 bg-secondary/40">
+                          {['Present', 'Excused', 'Absent'].map((opt) => {
+                            const active = currentEdit.status === opt;
+                            let cls = 'text-muted-foreground hover:text-foreground';
+                            if (active) {
+                              if (opt === 'Present') cls = 'bg-emerald-600 text-white';
+                              if (opt === 'Excused') cls = 'bg-amber-500 text-white';
+                              if (opt === 'Absent') cls = 'bg-rose-600 text-white';
+                            }
+                            return (
+                              <button
+                                key={opt}
+                                type="button"
+                                onClick={() => handleEditStatusChange(rec.id, opt)}
+                                className={`px-2.5 py-1 text-xs font-medium rounded-md whitespace-nowrap transition ${cls}`}
+                              >
+                                {opt}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input
+                          value={currentEdit.notes}
+                          onChange={(e) => handleEditNotesChange(rec.id, e.target.value)}
+                          placeholder={currentEdit.status === 'Excused' ? 'Reason...' : 'Note...'}
+                          className="h-7 text-xs"
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-border">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setSelectedMeetingDetail(null)}
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              disabled={savingEdit}
+              onClick={handleSaveEditedAttendance}
+              className="bg-primary hover:bg-primary/90 gap-2"
+            >
+              {savingEdit && <Loader2 className="w-4 h-4 animate-spin" />}
+              Save Changes
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
