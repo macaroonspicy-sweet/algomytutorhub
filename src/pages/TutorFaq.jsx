@@ -32,7 +32,7 @@ const FAQ_SECTIONS = [
     items: [
       {
         q: 'How do I complete my Monthly Student Feedback?',
-        a: 'On your Dashboard under "My Monthly Student Feedback", click the purple "Process" button next to an assigned group or private class. Fill in the student feedback points and notes for each student, then submit. Once completed, the status automatically updates to Done and counts toward your Discipline score.',
+        a: 'On your Dashboard under "My Monthly Student Feedback", click the purple "Process" button next to an assigned group or private class (every 4th lesson: Lesson 4, 8, 12, etc.). Fill in the student feedback points and notes for each student, then submit. Once completed, the status automatically updates to Completed and counts toward your Discipline score.',
       },
       {
         q: 'What if a class is postponed or rescheduled?',
@@ -50,11 +50,11 @@ const FAQ_SECTIONS = [
     items: [
       {
         q: 'How are my Tutor Metric scores calculated?',
-        a: 'Your overall performance is evaluated across three core pillars: (1) Attendance % (student attendance rate across your conducted classes), (2) Discipline % (timely submission of Monthly Student Feedback combined with QC Meeting attendance), and (3) Quality (QC) score from your monthly lesson evaluations.',
+        a: 'Your overall performance is evaluated across three core pillars: (1) Attendance % (student attendance rate across your conducted classes), (2) Discipline % (timely submission of Lesson 4 multiple Monthly Student Feedback combined with QC Meeting attendance), and (3) Quality (QC) score from your monthly lesson evaluations.',
       },
       {
         q: 'How is QC Meeting attendance weighted in Discipline %?',
-        a: 'For biweekly or monthly QC & Team Leader meetings: Hadir (Present) = 100%, Ijin (Excused with prior notice) = 75%, and Tidak Hadir (Unexcused absence) = 0%.',
+        a: 'For biweekly or monthly QC & Team Leader meetings: Present = 100%, Excused (with prior notice) = 75%, and Absent (unexcused) = 0%.',
       },
       {
         q: 'How often are Metric figures updated?',
@@ -105,7 +105,6 @@ export default function TutorFaq() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground flex items-center gap-2.5">
@@ -127,7 +126,6 @@ export default function TutorFaq() {
         </a>
       </div>
 
-      {/* Quick Info Banner */}
       <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 flex items-start gap-3">
         <Bell className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
         <div className="text-xs text-muted-foreground leading-relaxed">
@@ -135,7 +133,6 @@ export default function TutorFaq() {
         </div>
       </div>
 
-      {/* Accordion Sections */}
       <div className="space-y-5">
         {FAQ_SECTIONS.map((section, sIdx) => {
           const SectionIcon = section.icon;

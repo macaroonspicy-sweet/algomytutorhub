@@ -56,6 +56,29 @@ const isSameTutor = (a, b) => {
   return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
 };
 
+const normalizeAttendanceStatus = (status) => {
+  if (status === 'Hadir' || status === 'Present') return 'Present';
+  if (status === 'Ijin' || status === 'Excused') return 'Excused';
+  return 'Absent';
+};
+
+const isLessonFourMultiple = (assignment) => {
+  if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
+    const num = Number(assignment.lesson_number);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  return true;
+};
+
+const isAssignmentCompleted = (assignment) =>
+  assignment.is_done === true ||
+  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+
 export default function MyMetric() {
   const { currentUser } = useAppAuth();
   const [loading, setLoading] = useState(true);
@@ -74,7 +97,6 @@ export default function MyMetric() {
       if (!currentUser) return;
       setLoading(true);
       try {
-        // 1. BO Schedule Records
         let allSchedules = [];
         let from = 0;
         const step = 1000;
@@ -91,21 +113,18 @@ export default function MyMetric() {
         }
         setScheduleRecords(allSchedules);
 
-        // 2. QC Records
         const { data: qcData, error: qcErr } = await supabase
           .from('QCRecord')
           .select('id, tutor_id, tutor_name, period_month, period_year, evaluation_score, is_sample');
         if (qcErr) throw qcErr;
         setQcRecords((qcData || []).filter((q) => !q.is_sample));
 
-        // 3. Weekly Feedback Assignments
         const { data: assignData, error: assignErr } = await supabase
           .from('WeeklyFeedbackAssignment')
           .select('*');
         if (assignErr) throw assignErr;
         setFeedbackAssignments(assignData || []);
 
-        // 4. Tutor Meetings & Attendance
         const { data: meetData, error: meetErr } = await supabase
           .from('TutorMeeting')
           .select('id, meeting_date, topic')
@@ -151,10 +170,14 @@ export default function MyMetric() {
           )
         : null;
 
-    // 2. Monthly Feedback Progress
-    const myAssignments = feedbackAssignments.filter((a) => {
+    // 2. Monthly Feedback Progress (Lesson 4 multiples, counted per class assignment)
+    const myLesson4Assignments = feedbackAssignments.filter((a) => {
+      if (a.is_sample) return false;
+      if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
       const matchUser = (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName);
       if (!matchUser) return false;
+      if (!isLessonFourMultiple(a)) return false;
+
       if (a.week_start_date) {
         const [ay, am] = a.week_start_date.split('-');
         if (selectedYear !== 'all' && ay !== selectedYear) return false;
@@ -163,17 +186,11 @@ export default function MyMetric() {
       return true;
     });
 
-    const fbTarget = myAssignments.reduce((s, a) => s + (Number(a.student_count) || 1), 0);
-    const fbSubmitted = myAssignments.reduce((s, a) => {
-      const target = Number(a.student_count) || 1;
-      if (a.is_done || (a.status || '').toLowerCase() === 'done') {
-        return s + Math.max(Number(a.completed_count) || 0, target);
-      }
-      return s + Math.min(Number(a.completed_count) || 0, target);
-    }, 0);
+    const fbTarget = myLesson4Assignments.length;
+    const fbSubmitted = myLesson4Assignments.filter(isAssignmentCompleted).length;
     const fbPct = fbTarget > 0 ? Math.min(100, (fbSubmitted / fbTarget) * 100) : null;
 
-    // 3. Meeting Presence (Hadir = 100%, Ijin = 75%, Tidak Hadir = 0%)
+    // 3. Meeting Presence (Present = 100%, Excused = 75%, Absent = 0%)
     const filteredPeriodMeetings = meetings.filter((m) => {
       if (!m.meeting_date) return false;
       const [y, mStr] = m.meeting_date.split('-');
@@ -193,6 +210,7 @@ export default function MyMetric() {
         const meetObj = filteredPeriodMeetings.find((m) => m.id === att.meeting_id);
         return {
           ...att,
+          statusLabel: normalizeAttendanceStatus(att.status),
           meeting_date: meetObj?.meeting_date || '-',
           topic: meetObj?.topic || 'QC / Team Meeting',
         };
@@ -200,11 +218,11 @@ export default function MyMetric() {
       .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
 
     let meetPct = null;
-    let hadirCount = 0;
+    let presentCount = 0;
     if (myMeetingLogs.length > 0) {
-      hadirCount = myMeetingLogs.filter((r) => r.status === 'Hadir').length;
-      const ijinCount = myMeetingLogs.filter((r) => r.status === 'Ijin').length;
-      meetPct = ((hadirCount * 1 + ijinCount * 0.75) / myMeetingLogs.length) * 100;
+      presentCount = myMeetingLogs.filter((r) => r.statusLabel === 'Present').length;
+      const excusedCount = myMeetingLogs.filter((r) => r.statusLabel === 'Excused').length;
+      meetPct = ((presentCount * 1 + excusedCount * 0.75) / myMeetingLogs.length) * 100;
     }
 
     // 4. Discipline %
@@ -261,7 +279,7 @@ export default function MyMetric() {
       fbSubmitted,
       fbTarget,
       meetPct: meetPct !== null ? Math.round(meetPct) : null,
-      hadirCount,
+      presentCount,
       totalMeetings: myMeetingLogs.length,
       myMeetingLogs,
     };
@@ -314,7 +332,6 @@ export default function MyMetric() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-3">
@@ -329,7 +346,6 @@ export default function MyMetric() {
           </p>
         </div>
 
-        {/* Period Filter */}
         <div className="flex items-center gap-2.5">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
             <SelectTrigger className="w-36 bg-card">
@@ -364,7 +380,6 @@ export default function MyMetric() {
         </div>
       ) : (
         <>
-          {/* 5 Core Metric Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="bg-card border border-border rounded-2xl p-5">
               <div className="flex items-center justify-between">
@@ -420,16 +435,14 @@ export default function MyMetric() {
             </div>
           </div>
 
-          {/* Discipline Breakdown & Status Legend */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Discipline Components */}
             <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
               <h2 className="font-semibold text-foreground text-base">Discipline Breakdown</h2>
               <div className="space-y-3 text-sm">
                 <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/40">
                   <div>
                     <div className="font-medium text-foreground">Monthly Feedback</div>
-                    <div className="text-xs text-muted-foreground">Submitted vs assigned target</div>
+                    <div className="text-xs text-muted-foreground">Lesson 4 multiples completed</div>
                   </div>
                   <div className="text-right font-bold text-foreground">
                     {personalStats.fbTarget > 0
@@ -442,12 +455,12 @@ export default function MyMetric() {
                   <div>
                     <div className="font-medium text-foreground">QC Meeting Presence</div>
                     <div className="text-xs text-muted-foreground">
-                      Hadir: 100% • Ijin: 75% • Absent: 0%
+                      Present: 100% • Excused: 75% • Absent: 0%
                     </div>
                   </div>
                   <div className="text-right font-bold text-foreground">
                     {personalStats.totalMeetings > 0
-                      ? `${personalStats.meetPct}% (${personalStats.hadirCount}/${personalStats.totalMeetings})`
+                      ? `${personalStats.meetPct}% (${personalStats.presentCount}/${personalStats.totalMeetings})`
                       : '-'}
                   </div>
                 </div>
@@ -472,7 +485,6 @@ export default function MyMetric() {
               </div>
             </div>
 
-            {/* Meeting Presence Log */}
             <div className="lg:col-span-2 bg-card border border-border rounded-2xl overflow-hidden flex flex-col">
               <div className="p-5 border-b border-border flex items-center justify-between">
                 <div>
@@ -511,17 +523,17 @@ export default function MyMetric() {
                           </td>
                           <td className="px-4 py-3 text-foreground">{log.topic}</td>
                           <td className="px-4 py-3 whitespace-nowrap">
-                            {log.status === 'Hadir' ? (
+                            {log.statusLabel === 'Present' ? (
                               <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <CheckCircle2 className="w-3 h-3" /> Hadir
+                                <CheckCircle2 className="w-3 h-3" /> Present
                               </span>
-                            ) : log.status === 'Ijin' ? (
+                            ) : log.statusLabel === 'Excused' ? (
                               <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                                <Clock className="w-3 h-3" /> Ijin (75%)
+                                <Clock className="w-3 h-3" /> Excused (75%)
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                                <XCircle className="w-3 h-3" /> Tidak Hadir
+                                <XCircle className="w-3 h-3" /> Absent
                               </span>
                             )}
                           </td>

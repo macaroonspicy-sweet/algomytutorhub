@@ -39,6 +39,30 @@ const isSameTutor = (a, b) => {
   return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
 };
 
+const normalizeAttendanceStatus = (status) => {
+  const val = String(status || '').trim().toLowerCase();
+  if (val === 'present') return 'Present';
+  if (val === 'excused') return 'Excused';
+  return 'Absent';
+};
+
+const isLessonFourMultiple = (assignment) => {
+  if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
+    const num = Number(assignment.lesson_number);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  return true;
+};
+
+const isAssignmentCompleted = (assignment) =>
+  assignment.is_done === true ||
+  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+
 function StatCard({ label, value, icon: Icon, color, glow }) {
   return (
     <div className={`bg-card border border-border rounded-2xl p-6 flex items-center gap-5 ${glow || ''}`}>
@@ -164,24 +188,20 @@ export default function Dashboard() {
                 )
               : null;
 
-          // 2. Discipline % (Feedback compliance + QC Meeting presence with Ijin = 0.75)
+          // 2. Discipline % (Lesson 4 multiples feedback compliance + QC Meeting presence with Excused = 0.75)
           const myAssignments = (fbAssignData || []).filter((a) => {
+            if (a.is_sample) return false;
+            if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
             const matchUser = (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName);
-            if (!matchUser) return false;
+            if (!matchUser || !isLessonFourMultiple(a)) return false;
             if (a.week_start_date) {
               const [ay, am] = a.week_start_date.split('-');
               return Number(ay) === curYear && Number(am) === curMonth;
             }
             return true;
           });
-          const fbTarget = myAssignments.reduce((s, a) => s + (Number(a.student_count) || 1), 0);
-          const fbSubmitted = myAssignments.reduce((s, a) => {
-            const target = Number(a.student_count) || 1;
-            if (a.is_done || (a.status || '').toLowerCase() === 'done') {
-              return s + Math.max(Number(a.completed_count) || 0, target);
-            }
-            return s + Math.min(Number(a.completed_count) || 0, target);
-          }, 0);
+          const fbTarget = myAssignments.length;
+          const fbSubmitted = myAssignments.filter(isAssignmentCompleted).length;
           const fbPct = fbTarget > 0 ? Math.min(100, (fbSubmitted / fbTarget) * 100) : null;
 
           const validMeetingIds = new Set(
@@ -200,9 +220,13 @@ export default function Dashboard() {
           );
           let meetPct = null;
           if (myMeetRecs.length > 0) {
-            const hadir = myMeetRecs.filter((r) => r.status === 'Hadir').length;
-            const ijin = myMeetRecs.filter((r) => r.status === 'Ijin').length;
-            meetPct = ((hadir * 1 + ijin * 0.75) / myMeetRecs.length) * 100;
+            const present = myMeetRecs.filter(
+              (r) => normalizeAttendanceStatus(r.status) === 'Present'
+            ).length;
+            const excused = myMeetRecs.filter(
+              (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+            ).length;
+            meetPct = ((present * 1 + excused * 0.75) / myMeetRecs.length) * 100;
           }
 
           const discParts = [fbPct, meetPct].filter((v) => v !== null);
@@ -518,7 +542,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* QC submission form — tutor identity comes from the signed-in account */}
+      {/* QC submission form */}
       {['Tutor', 'Team Leader'].includes(currentUser?.role) && <QCSubmissionPanel />}
 
       {/* Role-based Quick Stats */}
@@ -573,7 +597,7 @@ export default function Dashboard() {
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Month</span>
               <span className="text-sm font-medium text-foreground">
-                {new Date().toLocaleString('default', { month: 'long' })}
+                {new Date().toLocaleString('en-US', { month: 'long' })}
               </span>
             </div>
             <div className="flex justify-between items-center">
@@ -583,7 +607,7 @@ export default function Dashboard() {
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Period</span>
               <span className="text-sm font-medium text-foreground">
-                {new Date().getDate() <= 15 ? 'Periode 1 (1-15)' : 'Periode 2 (16-31)'}
+                {new Date().getDate() <= 15 ? 'Period 1 (1–15)' : 'Period 2 (16–31)'}
               </span>
             </div>
           </div>

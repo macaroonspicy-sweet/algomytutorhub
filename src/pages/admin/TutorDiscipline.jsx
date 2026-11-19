@@ -66,6 +66,30 @@ const isSameTutor = (a, b) => {
   return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
 };
 
+const normalizeAttendanceStatus = (status) => {
+  const val = String(status || '').trim().toLowerCase();
+  if (val === 'present') return 'Present';
+  if (val === 'excused') return 'Excused';
+  return 'Absent';
+};
+
+const isLessonFourMultiple = (assignment) => {
+  if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
+    const num = Number(assignment.lesson_number);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  return true;
+};
+
+const isAssignmentCompleted = (assignment) =>
+  assignment.is_done === true ||
+  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+
 export default function TutorDiscipline() {
   const { currentUser } = useAppAuth();
 
@@ -95,7 +119,6 @@ export default function TutorDiscipline() {
   const loadAllData = async () => {
     setLoading(true);
     try {
-      // 1. Active Tutors from CustomUser
       const { data: userData, error: userErr } = await supabase
         .from('CustomUser')
         .select('id, full_name, username, role, is_active')
@@ -106,7 +129,6 @@ export default function TutorDiscipline() {
       const activeUsers = (userData || []).filter((u) => u.is_active !== false);
       setTutors(activeUsers);
 
-      // 2. BO Schedule Records (for Completed Classes)
       let allSchedules = [];
       let from = 0;
       const step = 1000;
@@ -123,14 +145,12 @@ export default function TutorDiscipline() {
       }
       setScheduleRecords(allSchedules);
 
-      // 3. WeeklyFeedbackAssignment (for Monthly Feedback Target & Submitted)
       const { data: assignData, error: assignErr } = await supabase
         .from('WeeklyFeedbackAssignment')
         .select('*');
       if (assignErr) throw assignErr;
       setFeedbackAssignments(assignData || []);
 
-      // 4. TutorMeeting & TutorMeetingAttendance
       const { data: meetData, error: meetErr } = await supabase
         .from('TutorMeeting')
         .select('*')
@@ -154,7 +174,6 @@ export default function TutorDiscipline() {
     loadAllData();
   }, []);
 
-  // Filter meetings by selected month/year
   const filteredMeetings = useMemo(() => {
     return meetings.filter((m) => {
       if (!m.meeting_date) return false;
@@ -165,7 +184,6 @@ export default function TutorDiscipline() {
     });
   }, [meetings, selectedMonth, selectedYear]);
 
-  // Compute Discipline Table Rows per Tutor
   const disciplineRows = useMemo(() => {
     const filteredMeetingIds = new Set(filteredMeetings.map((m) => m.id));
 
@@ -181,11 +199,13 @@ export default function TutorDiscipline() {
           return isSameTutor(r.lesson_teacher, tName);
         }).length;
 
-        // 2. Monthly Feedback Target & Submitted from WeeklyFeedbackAssignment
+        // 2. Monthly Feedback Target & Submitted (Lesson 4 multiples per class assignment)
         const tutorAssignments = feedbackAssignments.filter((a) => {
+          if (a.is_sample) return false;
+          if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
           const matchUser =
             (a.tutor_id && a.tutor_id === tutor.id) || isSameTutor(a.tutor_name, tName);
-          if (!matchUser) return false;
+          if (!matchUser || !isLessonFourMultiple(a)) return false;
 
           if (a.week_start_date) {
             const [ay, am] = a.week_start_date.split('-');
@@ -203,24 +223,15 @@ export default function TutorDiscipline() {
           return true;
         });
 
-        const feedbackTarget = tutorAssignments.reduce(
-          (sum, a) => sum + (Number(a.student_count) || 1),
-          0
-        );
-        const feedbackSubmitted = tutorAssignments.reduce((sum, a) => {
-          const target = Number(a.student_count) || 1;
-          if (a.is_done || (a.status || '').toLowerCase() === 'done') {
-            return sum + Math.max(Number(a.completed_count) || 0, target);
-          }
-          return sum + Math.min(Number(a.completed_count) || 0, target);
-        }, 0);
+        const feedbackTarget = tutorAssignments.length;
+        const feedbackSubmitted = tutorAssignments.filter(isAssignmentCompleted).length;
 
         const feedbackPct =
           feedbackTarget > 0
             ? Math.min(100, Math.round((feedbackSubmitted / feedbackTarget) * 100))
             : null;
 
-        // 3. Meeting Presence % from TutorMeetingAttendance (Option B: Hadir = 100%, Ijin = 75%, Tidak Hadir = 0%)
+        // 3. Meeting Presence % (Present = 100%, Excused = 75%, Absent = 0%)
         const tutorMeetingRecords = meetingAttendances.filter(
           (att) =>
             filteredMeetingIds.has(att.meeting_id) &&
@@ -230,11 +241,15 @@ export default function TutorDiscipline() {
         let meetingPct = null;
         let meetingSummaryText = '-';
         if (tutorMeetingRecords.length > 0) {
-          const hadirCount = tutorMeetingRecords.filter((r) => r.status === 'Hadir').length;
-          const ijinCount = tutorMeetingRecords.filter((r) => r.status === 'Ijin').length;
-          const weightedScore = hadirCount * 1 + ijinCount * 0.75;
+          const presentCount = tutorMeetingRecords.filter(
+            (r) => normalizeAttendanceStatus(r.status) === 'Present'
+          ).length;
+          const excusedCount = tutorMeetingRecords.filter(
+            (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+          ).length;
+          const weightedScore = presentCount * 1 + excusedCount * 0.75;
           meetingPct = Math.round((weightedScore / tutorMeetingRecords.length) * 100);
-          meetingSummaryText = `${meetingPct}% (${hadirCount}/${tutorMeetingRecords.length})`;
+          meetingSummaryText = `${meetingPct}% (${presentCount}/${tutorMeetingRecords.length})`;
         }
 
         // 4. Overall Discipline % & Status
@@ -281,7 +296,6 @@ export default function TutorDiscipline() {
     return disciplineRows.filter((r) => r.teacherName.toLowerCase().includes(q));
   }, [disciplineRows, search]);
 
-  // Summary KPIs
   const totalCompletedClasses = useMemo(
     () => disciplineRows.reduce((s, r) => s + r.completedClasses, 0),
     [disciplineRows]
@@ -300,14 +314,13 @@ export default function TutorDiscipline() {
     return Math.round(valid.reduce((s, r) => s + r.disciplinePct, 0) / valid.length);
   }, [disciplineRows]);
 
-  // Open Record Meeting Modal
   const openRecordModal = () => {
     const initialMap = {};
     tutors.forEach((t) => {
       initialMap[t.id] = {
         tutor_id: t.id,
         tutor_name: t.full_name || t.username || 'Unknown',
-        status: 'Hadir',
+        status: 'Present',
         notes: '',
       };
     });
@@ -332,11 +345,11 @@ export default function TutorDiscipline() {
     }));
   };
 
-  const handleMarkAllHadir = () => {
+  const handleMarkAllPresent = () => {
     setAttendanceMap((prev) => {
       const next = { ...prev };
       Object.keys(next).forEach((k) => {
-        next[k] = { ...next[k], status: 'Hadir' };
+        next[k] = { ...next[k], status: 'Present' };
       });
       return next;
     });
@@ -433,9 +446,9 @@ export default function TutorDiscipline() {
   const modalCounts = useMemo(() => {
     const vals = Object.values(attendanceMap);
     return {
-      hadir: vals.filter((v) => v.status === 'Hadir').length,
-      ijin: vals.filter((v) => v.status === 'Ijin').length,
-      tidakHadir: vals.filter((v) => v.status === 'Tidak Hadir').length,
+      present: vals.filter((v) => v.status === 'Present').length,
+      excused: vals.filter((v) => v.status === 'Excused').length,
+      absent: vals.filter((v) => v.status === 'Absent').length,
     };
   }, [attendanceMap]);
 
@@ -449,7 +462,7 @@ export default function TutorDiscipline() {
             Tutor Discipline
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Updated weekly • Synced from Completed Classes, Monthly Feedback targets, and QC Meeting Presence.
+            Updated weekly (every Tuesday) • Synced from Completed Classes, Monthly Feedback (Lesson 4 multiples), and QC Meeting Presence.
           </p>
         </div>
 
@@ -525,8 +538,8 @@ export default function TutorDiscipline() {
           </div>
           <div className="text-[11px] text-muted-foreground mt-0.5">
             {totalFeedbackTarget > 0
-              ? `${Math.round((totalFeedbackSubmitted / totalFeedbackTarget) * 100)}% completion rate`
-              : 'No feedback target assigned yet'}
+              ? `${Math.round((totalFeedbackSubmitted / totalFeedbackTarget) * 100)}% of Lesson 4 classes`
+              : 'No Lesson 4 target assigned yet'}
           </div>
         </div>
 
@@ -568,7 +581,6 @@ export default function TutorDiscipline() {
           <Loader2 className="w-7 h-7 animate-spin text-primary" />
         </div>
       ) : activeTab === 'table' ? (
-        /* Discipline Main Table */
         <div className="bg-card border border-border rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -640,7 +652,6 @@ export default function TutorDiscipline() {
           </div>
         </div>
       ) : (
-        /* Meeting Presence History Log */
         <div className="bg-card border border-border rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -648,9 +659,9 @@ export default function TutorDiscipline() {
                 <tr className="text-left">
                   <th className="px-4 py-3 font-medium">Meeting Date</th>
                   <th className="px-4 py-3 font-medium">Discussion Topic</th>
-                  <th className="px-4 py-3 font-medium text-center">Hadir</th>
-                  <th className="px-4 py-3 font-medium text-center">Ijin</th>
-                  <th className="px-4 py-3 font-medium text-center">Tidak Hadir</th>
+                  <th className="px-4 py-3 font-medium text-center">Present</th>
+                  <th className="px-4 py-3 font-medium text-center">Excused</th>
+                  <th className="px-4 py-3 font-medium text-center">Absent</th>
                   <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -665,9 +676,15 @@ export default function TutorDiscipline() {
                 ) : (
                   filteredMeetings.map((m) => {
                     const recs = meetingAttendances.filter((a) => a.meeting_id === m.id);
-                    const hadir = recs.filter((r) => r.status === 'Hadir').length;
-                    const ijin = recs.filter((r) => r.status === 'Ijin').length;
-                    const tidakHadir = recs.filter((r) => r.status === 'Tidak Hadir').length;
+                    const present = recs.filter(
+                      (r) => normalizeAttendanceStatus(r.status) === 'Present'
+                    ).length;
+                    const excused = recs.filter(
+                      (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+                    ).length;
+                    const absent = recs.filter(
+                      (r) => normalizeAttendanceStatus(r.status) === 'Absent'
+                    ).length;
 
                     return (
                       <tr key={m.id} className="hover:bg-secondary/30">
@@ -677,17 +694,17 @@ export default function TutorDiscipline() {
                         <td className="px-4 py-3 text-foreground">{m.topic}</td>
                         <td className="px-4 py-3 text-center">
                           <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
-                            {hadir}
+                            {present}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
-                            {ijin}
+                            {excused}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className="inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700">
-                            {tidakHadir}
+                            {absent}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap space-x-1">
@@ -726,7 +743,7 @@ export default function TutorDiscipline() {
               <Users className="w-5 h-5 text-primary" /> Record Meeting Attendance (QC Team)
             </DialogTitle>
             <p className="text-xs text-muted-foreground">
-              Enter the meeting date, discussion topic, and mark each tutor&apos;s presence status.
+              Enter the meeting date, discussion topic, and mark each tutor&apos;s attendance status.
             </p>
           </DialogHeader>
 
@@ -769,13 +786,13 @@ export default function TutorDiscipline() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs">
                 <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Hadir: {modalCounts.hadir}
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Present: {modalCounts.present}
                 </span>
                 <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium border border-amber-200">
-                  <Clock className="w-3.5 h-3.5" /> Ijin: {modalCounts.ijin}
+                  <Clock className="w-3.5 h-3.5" /> Excused: {modalCounts.excused}
                 </span>
                 <span className="inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-medium border border-rose-200">
-                  <XCircle className="w-3.5 h-3.5" /> Tidak Hadir: {modalCounts.tidakHadir}
+                  <XCircle className="w-3.5 h-3.5" /> Absent: {modalCounts.absent}
                 </span>
               </div>
 
@@ -790,10 +807,10 @@ export default function TutorDiscipline() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={handleMarkAllHadir}
+                  onClick={handleMarkAllPresent}
                   className="h-8 text-xs"
                 >
-                  Mark All Hadir
+                  Mark All Present
                 </Button>
               </div>
             </div>
@@ -810,7 +827,7 @@ export default function TutorDiscipline() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {modalFilteredTutors.map((t, idx) => {
-                    const entry = attendanceMap[t.id] || { status: 'Hadir', notes: '' };
+                    const entry = attendanceMap[t.id] || { status: 'Present', notes: '' };
                     return (
                       <tr key={t.id} className="hover:bg-secondary/20">
                         <td className="px-3 py-2 text-xs text-muted-foreground">{idx + 1}</td>
@@ -819,13 +836,13 @@ export default function TutorDiscipline() {
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <div className="inline-flex rounded-lg border border-border p-0.5 bg-secondary/40">
-                            {['Hadir', 'Ijin', 'Tidak Hadir'].map((opt) => {
+                            {['Present', 'Excused', 'Absent'].map((opt) => {
                               const active = entry.status === opt;
                               let cls = 'text-muted-foreground hover:text-foreground';
                               if (active) {
-                                if (opt === 'Hadir') cls = 'bg-emerald-600 text-white';
-                                if (opt === 'Ijin') cls = 'bg-amber-500 text-white';
-                                if (opt === 'Tidak Hadir') cls = 'bg-rose-600 text-white';
+                                if (opt === 'Present') cls = 'bg-emerald-600 text-white';
+                                if (opt === 'Excused') cls = 'bg-amber-500 text-white';
+                                if (opt === 'Absent') cls = 'bg-rose-600 text-white';
                               }
                               return (
                                 <button
@@ -844,7 +861,7 @@ export default function TutorDiscipline() {
                           <Input
                             value={entry.notes}
                             onChange={(e) => handleNotesChange(t.id, e.target.value)}
-                            placeholder={entry.status === 'Ijin' ? 'Reason...' : 'Note...'}
+                            placeholder={entry.status === 'Excused' ? 'Reason...' : 'Note...'}
                             className="h-7 text-xs"
                           />
                         </td>
@@ -896,28 +913,31 @@ export default function TutorDiscipline() {
               <tbody className="divide-y divide-border">
                 {(selectedMeetingDetail?.records || [])
                   .sort((a, b) => a.tutor_name.localeCompare(b.tutor_name))
-                  .map((rec, i) => (
-                    <tr key={rec.id}>
-                      <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
-                      <td className="px-3 py-2 font-medium text-foreground whitespace-nowrap">
-                        {rec.tutor_name}
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full font-semibold ${
-                            rec.status === 'Hadir'
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : rec.status === 'Ijin'
-                              ? 'bg-amber-50 text-amber-700'
-                              : 'bg-rose-50 text-rose-700'
-                          }`}
-                        >
-                          {rec.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-muted-foreground">{rec.notes || '-'}</td>
-                    </tr>
-                  ))}
+                  .map((rec, i) => {
+                    const statusLabel = normalizeAttendanceStatus(rec.status);
+                    return (
+                      <tr key={rec.id}>
+                        <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
+                        <td className="px-3 py-2 font-medium text-foreground whitespace-nowrap">
+                          {rec.tutor_name}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full font-semibold ${
+                              statusLabel === 'Present'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : statusLabel === 'Excused'
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-rose-50 text-rose-700'
+                            }`}
+                          >
+                            {statusLabel}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground">{rec.notes || '-'}</td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>

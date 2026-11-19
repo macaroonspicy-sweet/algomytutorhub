@@ -51,6 +51,30 @@ const isSameTutor = (a, b) => {
   return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
 };
 
+const normalizeAttendanceStatus = (status) => {
+  const val = String(status || '').trim().toLowerCase();
+  if (val === 'present') return 'Present';
+  if (val === 'excused') return 'Excused';
+  return 'Absent';
+};
+
+const isLessonFourMultiple = (assignment) => {
+  if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
+    const num = Number(assignment.lesson_number);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  return true;
+};
+
+const isAssignmentCompleted = (assignment) =>
+  assignment.is_done === true ||
+  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+
 export default function TutorMetric() {
   const [loading, setLoading] = useState(true);
   const [tutors, setTutors] = useState([]);
@@ -69,7 +93,6 @@ export default function TutorMetric() {
   const loadAllData = async () => {
     setLoading(true);
     try {
-      // 1. Active Tutors from CustomUser
       const { data: userData, error: userErr } = await supabase
         .from('CustomUser')
         .select('id, full_name, username, role, is_active')
@@ -78,7 +101,6 @@ export default function TutorMetric() {
       if (userErr) throw userErr;
       setTutors((userData || []).filter((u) => u.is_active !== false));
 
-      // 2. BO Schedule Records (Attendance %)
       let allSchedules = [];
       let from = 0;
       const step = 1000;
@@ -95,21 +117,18 @@ export default function TutorMetric() {
       }
       setScheduleRecords(allSchedules);
 
-      // 3. QCRecord (Quality Score)
       const { data: qcData, error: qcErr } = await supabase
         .from('QCRecord')
         .select('id, tutor_id, tutor_name, period_month, period_year, evaluation_score, is_sample');
       if (qcErr) throw qcErr;
       setQcRecords((qcData || []).filter((q) => !q.is_sample));
 
-      // 4. WeeklyFeedbackAssignment (for Discipline)
       const { data: assignData, error: assignErr } = await supabase
         .from('WeeklyFeedbackAssignment')
         .select('*');
       if (assignErr) throw assignErr;
       setFeedbackAssignments(assignData || []);
 
-      // 5. TutorMeeting & TutorMeetingAttendance (for Discipline)
       const { data: meetData, error: meetErr } = await supabase
         .from('TutorMeeting')
         .select('id, meeting_date');
@@ -132,7 +151,6 @@ export default function TutorMetric() {
     loadAllData();
   }, []);
 
-  // Determine target QC month/year based on 'last_month' (SOP) or 'same_month'
   const targetQcPeriod = useMemo(() => {
     if (selectedMonth === 'all' || selectedYear === 'all') return null;
     let m = Number(selectedMonth);
@@ -148,7 +166,6 @@ export default function TutorMetric() {
   }, [selectedMonth, selectedYear, qcSourceMode]);
 
   const metricRows = useMemo(() => {
-    // Filter meetings for selected period
     const validMeetingIds = new Set(
       meetings
         .filter((m) => {
@@ -164,7 +181,7 @@ export default function TutorMetric() {
     const computed = tutors.map((tutor) => {
       const tName = tutor.full_name || tutor.username || 'Unknown';
 
-      // A. Attendance % (from conducted lessons in BoScheduleRecord)
+      // A. Attendance %
       const tutorConducted = scheduleRecords.filter((r) => {
         if (r.is_test_group || !r.is_conducted) return false;
         if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
@@ -182,10 +199,14 @@ export default function TutorMetric() {
             )
           : null;
 
-      // B. Discipline % (Feedback compliance + Meeting presence with Ijin = 0.75)
+      // B. Discipline % (Lesson 4 multiples feedback compliance + Meeting presence with Excused = 0.75)
       const tutorAssignments = feedbackAssignments.filter((a) => {
-        const matchUser = (a.tutor_id && a.tutor_id === tutor.id) || isSameTutor(a.tutor_name, tName);
-        if (!matchUser) return false;
+        if (a.is_sample) return false;
+        if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
+        const matchUser =
+          (a.tutor_id && a.tutor_id === tutor.id) || isSameTutor(a.tutor_name, tName);
+        if (!matchUser || !isLessonFourMultiple(a)) return false;
+
         if (a.week_start_date) {
           const [ay, am] = a.week_start_date.split('-');
           if (selectedYear !== 'all' && ay !== selectedYear) return false;
@@ -194,14 +215,8 @@ export default function TutorMetric() {
         return true;
       });
 
-      const fbTarget = tutorAssignments.reduce((s, a) => s + (Number(a.student_count) || 1), 0);
-      const fbSubmitted = tutorAssignments.reduce((s, a) => {
-        const target = Number(a.student_count) || 1;
-        if (a.is_done || (a.status || '').toLowerCase() === 'done') {
-          return s + Math.max(Number(a.completed_count) || 0, target);
-        }
-        return s + Math.min(Number(a.completed_count) || 0, target);
-      }, 0);
+      const fbTarget = tutorAssignments.length;
+      const fbSubmitted = tutorAssignments.filter(isAssignmentCompleted).length;
       const fbPct = fbTarget > 0 ? Math.min(100, (fbSubmitted / fbTarget) * 100) : null;
 
       const tutorMeetRecs = meetingAttendances.filter(
@@ -211,9 +226,13 @@ export default function TutorMetric() {
       );
       let meetPct = null;
       if (tutorMeetRecs.length > 0) {
-        const hadir = tutorMeetRecs.filter((r) => r.status === 'Hadir').length;
-        const ijin = tutorMeetRecs.filter((r) => r.status === 'Ijin').length;
-        meetPct = ((hadir * 1 + ijin * 0.75) / tutorMeetRecs.length) * 100;
+        const present = tutorMeetRecs.filter(
+          (r) => normalizeAttendanceStatus(r.status) === 'Present'
+        ).length;
+        const excused = tutorMeetRecs.filter(
+          (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+        ).length;
+        meetPct = ((present * 1 + excused * 0.75) / tutorMeetRecs.length) * 100;
       }
 
       const discParts = [fbPct, meetPct].filter((v) => v !== null);
@@ -222,7 +241,7 @@ export default function TutorMetric() {
           ? Number((discParts.reduce((a, b) => a + b, 0) / discParts.length).toFixed(2))
           : null;
 
-      // C. Quality (QC) Score from QCRecord
+      // C. Quality (QC) Score
       const tutorQcs = qcRecords.filter((q) => {
         const matchUser = (q.tutor_id && q.tutor_id === tutor.id) || isSameTutor(q.tutor_name, tName);
         if (!matchUser || q.evaluation_score === null || q.evaluation_score === undefined) return false;
@@ -242,7 +261,7 @@ export default function TutorMetric() {
             )
           : null;
 
-      // D. Complaint (default '-')
+      // D. Complaint
       const complaint = '-';
 
       // E. Overall Composite Score & Status Classification
@@ -273,7 +292,6 @@ export default function TutorMetric() {
       };
     });
 
-    // Sort: highest compositeScore first, 'No result' at bottom
     return computed.sort((a, b) => {
       if (a.compositeScore === -1 && b.compositeScore === -1) {
         return a.teacherName.localeCompare(b.teacherName);
@@ -303,7 +321,6 @@ export default function TutorMetric() {
     });
   }, [metricRows, statusFilter, search]);
 
-  // Summary Counts
   const statusCounts = useMemo(() => {
     return {
       high: metricRows.filter((r) => r.status === 'High Performer').length,
@@ -342,7 +359,6 @@ export default function TutorMetric() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground flex items-center gap-2.5">
@@ -350,7 +366,7 @@ export default function TutorMetric() {
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Quality updated monthly (based on last month&apos;s QC result) • Attendance &amp; Discipline updated weekly .
+            Quality updated monthly (based on last month&apos;s QC result) • Attendance &amp; Discipline updated weekly (every Tuesday).
           </p>
         </div>
 
@@ -359,7 +375,6 @@ export default function TutorMetric() {
         </Button>
       </div>
 
-      {/* Status Legend & Update Schedule Banner */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-card border border-border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-2.5">
@@ -369,7 +384,7 @@ export default function TutorMetric() {
                 <strong className="text-foreground">Quality (QC):</strong> Updated monthly (based on last month&apos;s QC result)
               </div>
               <div>
-                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly 
+                <strong className="text-foreground">Attendance &amp; Discipline:</strong> Updated weekly (every Tuesday)
               </div>
             </div>
           </div>
@@ -390,7 +405,6 @@ export default function TutorMetric() {
           </div>
         </div>
 
-        {/* Filter Controls */}
         <div className="bg-card border border-border rounded-2xl p-4 grid grid-cols-2 gap-2.5">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
             <SelectTrigger>
@@ -429,7 +443,6 @@ export default function TutorMetric() {
         </div>
       </div>
 
-      {/* Search & Status Filter Bar */}
       <div className="bg-card border border-border rounded-2xl p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -456,7 +469,6 @@ export default function TutorMetric() {
         </Select>
       </div>
 
-      {/* Main Tutor Metric Table */}
       {loading ? (
         <div className="flex justify-center py-16">
           <Loader2 className="w-7 h-7 animate-spin text-primary" />
