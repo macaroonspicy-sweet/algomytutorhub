@@ -33,14 +33,31 @@ export function fmtDate(value) {
 export function assignmentStatus(assignment) {
   const st = String(assignment?.status || '').toLowerCase().trim();
   if (st === 'rescheduled' || st === 'postponed') return 'rescheduled';
-  if (st === 'completed' || st === 'done' || assignment?.is_done) return 'completed';
-  if (assignment?.week_end_date && String(assignment.week_end_date).slice(0, 10) < todayKey()) return 'overdue';
+
+  const endKey = assignment?.week_end_date ? String(assignment.week_end_date).slice(0, 10) : '';
+  const deadlineMs = endKey ? new Date(`${endKey}T23:59:59`).getTime() : null;
+
+  const isDone = st === 'completed' || st === 'done' || st === 'done_overdue' || Boolean(assignment?.is_done);
+  if (isDone) {
+    if (st === 'done_overdue') return 'done_overdue';
+    const finishedRaw = assignment?.completed_at || assignment?.completed_date || assignment?.updated_date;
+    if (deadlineMs && finishedRaw) {
+      const finishedMs = new Date(finishedRaw).getTime();
+      if (!Number.isNaN(finishedMs) && finishedMs > deadlineMs) {
+        return 'done_overdue';
+      }
+    }
+    return 'completed';
+  }
+
+  if (endKey && endKey < todayKey()) return 'overdue';
   return 'pending';
 }
 
 export const FEEDBACK_STATUS_META = {
   pending: { label: 'Pending', className: 'bg-chart-4/15 text-chart-4 border-chart-4/30' },
   completed: { label: 'Completed', className: 'bg-chart-3/15 text-chart-3 border-chart-3/30' },
+  done_overdue: { label: 'Done Overdue', className: 'bg-orange-500/15 text-orange-600 border-orange-500/30' },
   rescheduled: { label: 'Rescheduled', className: 'bg-amber-500/15 text-amber-600 border-amber-500/30' },
   overdue: { label: 'Overdue', className: 'bg-destructive/15 text-destructive border-destructive/30' },
 };

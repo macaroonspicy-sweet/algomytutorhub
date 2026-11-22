@@ -20,6 +20,13 @@ const ITEMS_PER_PAGE = 12;
 
 const classKeyOf = (item) => item.class_name || item.class_code || item.student_name || '';
 
+const isPastWeekDeadline = (item, nowMs = Date.now()) => {
+  const endStr = item?.week_end_date ? String(item.week_end_date).slice(0, 10) : null;
+  if (!endStr) return false;
+  const deadlineMs = new Date(`${endStr}T23:59:59`).getTime();
+  return !Number.isNaN(deadlineMs) && nowMs > deadlineMs;
+};
+
 export default function WeeklyFeedback() {
   const { currentUser, hasPermission } = useAppAuth();
   const [items, setItems] = useState([]);
@@ -68,7 +75,8 @@ export default function WeeklyFeedback() {
       const fetchedRecords = recordsData || [];
 
       const updatedAssignments = fetchedAssignments.map((assignment) => {
-        if (assignment.status === 'completed' || assignment.status === 'rescheduled') return assignment;
+        const currentSt = String(assignment.status || '').toLowerCase();
+        if (['completed', 'done_overdue', 'rescheduled'].includes(currentSt)) return assignment;
 
         const filledCount = fetchedRecords.filter(
           (r) => r.class_name === assignment.class_name || r.class_code === assignment.class_code
@@ -78,10 +86,12 @@ export default function WeeklyFeedback() {
 
         if (filledCount >= targetCount && filledCount > 0) {
           const nowIso = new Date().toISOString();
+          const nextStatus = isPastWeekDeadline(assignment) ? 'done_overdue' : 'completed';
+
           supabase
             .from('WeeklyFeedbackAssignment')
             .update({
-              status: 'completed',
+              status: nextStatus,
               is_done: true,
               completed_at: nowIso,
               completed_date: nowIso,
@@ -90,7 +100,12 @@ export default function WeeklyFeedback() {
             .eq('id', assignment.id)
             .then();
 
-          return { ...assignment, status: 'completed', is_done: true };
+          return {
+            ...assignment,
+            status: nextStatus,
+            is_done: true,
+            completed_at: nowIso,
+          };
         }
         return assignment;
       });
@@ -147,10 +162,12 @@ export default function WeeklyFeedback() {
     setBusyId(item.id);
     try {
       const nowIso = new Date().toISOString();
+      const nextStatus = isPastWeekDeadline(item) ? 'done_overdue' : 'completed';
+
       const { error } = await supabase
         .from('WeeklyFeedbackAssignment')
         .update({
-          status: 'completed',
+          status: nextStatus,
           is_done: true,
           completed_by_name: currentUser?.full_name || currentUser?.email || 'Tutor',
           completed_at: nowIso,
@@ -160,7 +177,7 @@ export default function WeeklyFeedback() {
         .eq('id', item.id);
 
       if (error) throw error;
-      toast.success('Marked as completed');
+      toast.success(nextStatus === 'done_overdue' ? 'Marked as Done Overdue' : 'Marked as completed');
       loadAll();
     } catch (err) {
       toast.error('Could not update status', { description: err.message });
@@ -307,11 +324,12 @@ export default function WeeklyFeedback() {
             </SelectContent>
           </Select>
           <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger className="lg:w-36"><SelectValue placeholder="Status" /></SelectTrigger>
+            <SelectTrigger className="lg:w-40"><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All status</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="done_overdue">Done Overdue</SelectItem>
               <SelectItem value="rescheduled">Rescheduled</SelectItem>
               <SelectItem value="overdue">Overdue</SelectItem>
             </SelectContent>
@@ -351,6 +369,7 @@ export default function WeeklyFeedback() {
                 {paginated.map((item) => {
                   const st = assignmentStatus(item);
                   const meta = FEEDBACK_STATUS_META[st] || { label: st, className: 'bg-muted text-muted-foreground' };
+                  const isFinished = st === 'completed' || st === 'done_overdue';
                   return (
                     <tr key={item.id} className="hover:bg-secondary/30 transition-colors">
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
@@ -365,14 +384,14 @@ export default function WeeklyFeedback() {
                       <td className="px-4 py-3 text-foreground">{item.tutor_name}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex px-2 py-0.5 rounded-full border text-[11px] font-medium ${meta.className}`}>{meta.label}</span>
-                        {(st === 'completed' || st === 'rescheduled') && item.completed_by_name && (
+                        {(isFinished || st === 'rescheduled') && item.completed_by_name && (
                           <div className="text-[10px] text-muted-foreground mt-1">by {item.completed_by_name}</div>
                         )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground max-w-[220px] truncate" title={item.notes || ''}>{item.notes || '—'}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1">
-                          {st !== 'completed' && (
+                          {!isFinished && (
                             <Button
                               size="icon"
                               variant="ghost"

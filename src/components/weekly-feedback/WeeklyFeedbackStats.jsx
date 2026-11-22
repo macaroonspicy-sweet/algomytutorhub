@@ -18,7 +18,9 @@ function StatCard({ label, value, icon: Icon, tone }) {
 
 export default function WeeklyFeedbackStats({ items }) {
   const total = items.length;
-  const completed = items.filter((i) => assignmentStatus(i) === 'completed').length;
+  const completedOnly = items.filter((i) => assignmentStatus(i) === 'completed').length;
+  const doneOverdue = items.filter((i) => assignmentStatus(i) === 'done_overdue').length;
+  const completed = completedOnly + doneOverdue;
   const pending = items.filter((i) => assignmentStatus(i) === 'pending').length;
   const rescheduled = items.filter((i) => assignmentStatus(i) === 'rescheduled').length;
   const overdue = items.filter((i) => assignmentStatus(i) === 'overdue').length;
@@ -33,6 +35,7 @@ export default function WeeklyFeedbackStats({ items }) {
           name: item.tutor_name || 'Unknown tutor',
           total: 0,
           completed: 0,
+          done_overdue: 0,
           pending: 0,
           rescheduled: 0,
           overdue: 0,
@@ -40,7 +43,14 @@ export default function WeeklyFeedbackStats({ items }) {
       }
       const status = assignmentStatus(item);
       acc[key].total += 1;
-      acc[key][status] = (acc[key][status] || 0) + 1;
+      if (status === 'completed' || status === 'done_overdue') {
+        acc[key].completed += 1;
+        if (status === 'done_overdue') {
+          acc[key].done_overdue += 1;
+        }
+      } else {
+        acc[key][status] = (acc[key][status] || 0) + 1;
+      }
       return acc;
     }, {})
   ).sort((a, b) => b.total - a.total);
@@ -63,15 +73,20 @@ export default function WeeklyFeedbackStats({ items }) {
         {byTutor.length === 0 ? (
           <p className="text-sm text-muted-foreground">No assignments in this view yet.</p>
         ) : (
-          <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+          <div className="space-y-3.5 max-h-72 overflow-y-auto pr-1">
             {byTutor.map((tutor) => {
               const pct = tutor.total ? Math.round((tutor.completed / tutor.total) * 100) : 0;
+              const doneWidth = tutor.total ? (tutor.completed / tutor.total) * 100 : 0;
+              const reschedWidth = tutor.total ? (tutor.rescheduled / tutor.total) * 100 : 0;
               return (
                 <div key={tutor.id} className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="font-medium text-foreground">{tutor.name}</span>
                     <span className="text-muted-foreground">
                       {tutor.completed}/{tutor.total} done · {pct}%
+                      {tutor.done_overdue > 0 && (
+                        <span className="text-orange-600"> · {tutor.done_overdue} done overdue</span>
+                      )}
                       {tutor.rescheduled > 0 && (
                         <span className="text-amber-600"> · {tutor.rescheduled} rescheduled</span>
                       )}
@@ -80,8 +95,19 @@ export default function WeeklyFeedbackStats({ items }) {
                       )}
                     </span>
                   </div>
-                  <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                    <div className="h-full bg-chart-3 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                  <div className="h-2 bg-secondary rounded-full overflow-hidden flex">
+                    {doneWidth > 0 && (
+                      <div
+                        className="h-full bg-emerald-500 transition-all duration-300"
+                        style={{ width: `${doneWidth}%` }}
+                      />
+                    )}
+                    {reschedWidth > 0 && (
+                      <div
+                        className="h-full bg-amber-400 transition-all duration-300"
+                        style={{ width: `${reschedWidth}%` }}
+                      />
+                    )}
                   </div>
                 </div>
               );
