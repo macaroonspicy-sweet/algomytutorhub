@@ -39,8 +39,6 @@ const MONTHS = [
 
 const FEEDBACK_WEIGHT = 0.75;
 const MEETING_WEIGHT = 0.25;
-
-// Bobot poin per item feedback (maksimal 100 jika tepat waktu)
 const ON_TIME_POINTS = 100;
 const DONE_OVERDUE_POINTS = 75;
 
@@ -82,10 +80,12 @@ const isLessonFourMultiple = (assignment) => {
   return true;
 };
 
-// Mengembalikan bobot poin (100 / 75 / 0) per assignment feedback
 const getFeedbackItemScore = (assignment) => {
   const status = String(assignment.status || '').trim().toLowerCase();
-  if (status === 'done_overdue' || assignment.is_overdue === true && (assignment.is_done === true || status.includes('done'))) {
+  if (
+    status === 'done_overdue' ||
+    (assignment.is_overdue === true && (assignment.is_done === true || status.includes('done')))
+  ) {
     return DONE_OVERDUE_POINTS;
   }
   if (
@@ -97,7 +97,7 @@ const getFeedbackItemScore = (assignment) => {
   return 0;
 };
 
-const parseEnrolledCount = (r) => {
+const parseExpectedStudentsCount = (r) => {
   const rawMatch = String(r.students_raw || '').replace(/\u00a0/g, ' ').trim().match(/^(\d+)/);
   if (rawMatch) {
     const parsed = Number(rawMatch[1]);
@@ -106,6 +106,14 @@ const parseEnrolledCount = (r) => {
   const direct = Number(r.students_count);
   if (!Number.isNaN(direct) && direct > 0) return direct;
   return 0;
+};
+
+const getStatusFromScore = (score) => {
+  if (score === null || score === undefined) return 'No result';
+  if (score >= 90) return 'High Performer';
+  if (score >= 80) return 'Stable Performer';
+  if (score >= 70) return 'Need Improvement';
+  return 'Low Performance';
 };
 
 const getPerformanceBadge = (status) => {
@@ -134,7 +142,7 @@ export default function TutorMetric() {
 
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
-  const [qcPeriodMode, setQcPeriodMode] = useState('prev'); // 'prev' (SOP) | 'current'
+  const [qcPeriodMode, setQcPeriodMode] = useState('prev'); // 'prev' (Last month SOP) | 'current'
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
 
@@ -246,31 +254,33 @@ export default function TutorMetric() {
         Number(q.period_year) === qcTargetYear
     );
 
-    return tutors.map((tutor) => {
+    const rows = tutors.map((tutor) => {
       const tName = tutor.full_name || tutor.username || '';
       const tId = tutor.id;
 
-      // 1. Classes Conducted & Student Attendance Ratio
+      // 1. Attendance Ratio = (totalAttended / totalExpected) * 100%
       const myScheds = monthSchedules.filter((r) => isSameTutor(r.lesson_teacher, tName));
       const classesConducted = myScheds.length;
       const totalAttended = myScheds.reduce((s, r) => s + (Number(r.students_attended) || 0), 0);
-      const totalEnrolled = myScheds.reduce((s, r) => s + parseEnrolledCount(r), 0);
+      const totalExpected = myScheds.reduce((s, r) => s + parseExpectedStudentsCount(r), 0);
       const attendancePct =
-        classesConducted > 0 && totalEnrolled > 0
-          ? Number(((totalAttended / totalEnrolled) * 100).toFixed(2))
+        classesConducted > 0 && totalExpected > 0
+          ? Number(((totalAttended / totalExpected) * 100).toFixed(2))
           : null;
 
-      // 2. Discipline (75% Monthly Feedback dengan pengurangan done_overdue + 25% Meeting Presence)
+      // 2. Discipline (75% Monthly Feedback dengan penalti done_overdue + 25% Meeting Presence)
       const myFb = monthAssignments.filter(
         (a) => (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName)
       );
       let fbPct = null;
       let doneOverdueCount = 0;
+      let missedOrOverdueFeedback = 0;
       if (myFb.length > 0) {
         let totalFbScore = 0;
         myFb.forEach((item) => {
           const itemScore = getFeedbackItemScore(item);
           if (itemScore === DONE_OVERDUE_POINTS) doneOverdueCount += 1;
+          if (itemScore < ON_TIME_POINTS) missedOrOverdueFeedback += 1;
           totalFbScore += itemScore;
         });
         fbPct = Number((totalFbScore / myFb.length).toFixed(1));
@@ -282,12 +292,16 @@ export default function TutorMetric() {
           (att.tutor_id === tId || isSameTutor(att.tutor_name, tName))
       );
       let meetPct = null;
+      let absentMeetingCount = 0;
       if (myMeetAtt.length > 0) {
         const present = myMeetAtt.filter(
           (r) => normalizeAttendanceStatus(r.status) === 'Present'
         ).length;
         const excused = myMeetAtt.filter(
           (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+        ).length;
+        absentMeetingCount = myMeetAtt.filter(
+          (r) => normalizeAttendanceStatus(r.status) === 'Absent'
         ).length;
         meetPct = Number((((present * 1 + excused * 0.75) / myMeetAtt.length) * 100).toFixed(1));
       }
@@ -300,6 +314,17 @@ export default function TutorMetric() {
       } else if (meetPct !== null) {
         disciplinePct = Number(meetPct.toFixed(2));
       }
+
+      const hasDisciplineIssue =
+        (fbPct !== null && fbPct < 100) ||
+        (meetPct !== null && meetPct < 100) ||
+        missedOrOverdueFeedback > 0 ||
+        absentMeetingCount > 0;
+      const disciplineLabel = !hasDisciplineIssue
+        ? 'No discipline'
+        : `${disciplinePct !== null ? `${disciplinePct}%` : 'Issue'}${
+            doneOverdueCount > 0 ? ` (${doneOverdueCount} overdue)` : ''
+          }`;
 
       // 3. Quality (QC)
       const myQcs = targetQcs.filter(
@@ -315,28 +340,25 @@ export default function TutorMetric() {
           : null;
 
       // 4. Composite Score & Status
-      const activeScores = [attendancePct, disciplinePct, qualityScore].filter((v) => v !== null);
+      const activeScores = [attendancePct, qualityScore].filter((v) => v !== null);
       const compositeScore =
         activeScores.length > 0
-          ? Number((activeScores.reduce((a, b) => a + b, 0) / activeScores.length).toFixed(1))
+          ? Number((activeScores.reduce((a, b) => a + b, 0) / activeScores.length).toFixed(2))
           : null;
 
-      let status = 'No result';
-      if (compositeScore !== null) {
-        if (compositeScore >= 90) status = 'High Performer';
-        else if (compositeScore >= 80) status = 'Stable Performer';
-        else if (compositeScore >= 70) status = 'Need Improvement';
-        else status = 'Low Performance';
-      }
+      const status = getStatusFromScore(compositeScore);
 
       return {
         id: tId,
-        tutorName: tName,
+        teacherName: tName,
+        teamLeader: 'Putri Nadia Ayu R',
         role: tutor.role,
         classesConducted,
         totalAttended,
-        totalEnrolled,
+        totalExpected,
         attendancePct,
+        disciplineLabel,
+        hasDisciplineIssue,
         fbPct,
         doneOverdueCount,
         meetPct,
@@ -347,6 +369,15 @@ export default function TutorMetric() {
         compositeScore,
         status,
       };
+    });
+
+    return rows.sort((a, b) => {
+      const scoreA = a.compositeScore ?? -1;
+      const scoreB = b.compositeScore ?? -1;
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      const attA = a.attendancePct ?? -1;
+      const attB = b.attendancePct ?? -1;
+      return attB - attA;
     });
   }, [
     tutors,
@@ -365,16 +396,20 @@ export default function TutorMetric() {
       if (statusFilter !== 'all' && row.status !== statusFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        if (!row.tutorName.toLowerCase().includes(q)) return false;
+        if (!row.teacherName.toLowerCase().includes(q)) return false;
       }
       return true;
     });
   }, [metricRows, statusFilter, search]);
 
   const summary = useMemo(() => {
-    const validAtt = filteredRows.filter((r) => r.attendancePct !== null);
     const validDisc = filteredRows.filter((r) => r.disciplinePct !== null);
     const validQc = filteredRows.filter((r) => r.qualityScore !== null);
+
+    const sumAttended = filteredRows.reduce((s, r) => s + (r.totalAttended || 0), 0);
+    const sumExpected = filteredRows.reduce((s, r) => s + (r.totalExpected || 0), 0);
+    const avgAttendance =
+      sumExpected > 0 ? Number(((sumAttended / sumExpected) * 100).toFixed(1)) : null;
 
     const avg = (arr, key) =>
       arr.length > 0
@@ -384,7 +419,7 @@ export default function TutorMetric() {
     return {
       totalTutors: filteredRows.length,
       totalClasses: filteredRows.reduce((s, r) => s + r.classesConducted, 0),
-      avgAttendance: avg(validAtt, 'attendancePct'),
+      avgAttendance,
       avgDiscipline: avg(validDisc, 'disciplinePct'),
       avgQuality: avg(validQc, 'qualityScore'),
     };
@@ -394,24 +429,19 @@ export default function TutorMetric() {
     try {
       const XLSX = await import('xlsx');
       const exportData = filteredRows.map((r, idx) => ({
-        No: idx + 1,
-        'Tutor Name': r.tutorName,
-        Role: r.role,
-        'Classes Conducted': r.classesConducted,
-        'Attendance (%)': r.attendancePct !== null ? r.attendancePct : '-',
-        'Student Ratio': `${r.totalAttended}/${r.totalEnrolled}`,
-        'Discipline (%)': r.disciplinePct !== null ? r.disciplinePct : '-',
-        'Feedback (75%)': r.fbPct !== null ? `${r.fbPct}%` : '-',
-        'Done Overdue Count': r.doneOverdueCount,
-        'Meeting (25%)': r.meetPct !== null ? `${r.meetPct}%` : '-',
+        Rating: idx + 1,
+        'Teacher Name': r.teacherName,
+        'Team Leader': r.teamLeader,
+        'Attendance (%)': r.attendancePct !== null ? `${r.attendancePct.toFixed(2)}%` : '-',
+        'Student Ratio': `${r.totalAttended}/${r.totalExpected}`,
+        Discipline: r.disciplineLabel,
         'Quality (QC)': r.qualityScore !== null ? r.qualityScore : '-',
         Complaint: r.complaint,
-        'Composite Score': r.compositeScore !== null ? r.compositeScore : '-',
         Status: r.status,
       }));
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exportData), 'Tutor Metrics');
-      XLSX.writeFile(wb, `Tutor_Metrics_${selectedMonth}_${selectedYear}.xlsx`);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exportData), 'Tutor Central');
+      XLSX.writeFile(wb, `Tutor_Central_${selectedMonth}_${selectedYear}.xlsx`);
       toast.success('Tutor Metric report exported');
     } catch (err) {
       toast.error('Export failed', { description: err.message });
@@ -428,7 +458,7 @@ export default function TutorMetric() {
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Monthly tutor performance evaluation: Attendance Ratio, Discipline (75% Feedback + 25% Meeting), &amp; QC Quality.
+            Monthly tutor performance evaluation: Attendance Ratio, Discipline (75% Feedback + 25% Meeting), &amp; Last Month QC Quality.
           </p>
         </div>
 
@@ -478,10 +508,10 @@ export default function TutorMetric() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="High Performer">High Performer</SelectItem>
-            <SelectItem value="Stable Performer">Stable Performer</SelectItem>
-            <SelectItem value="Need Improvement">Need Improvement</SelectItem>
-            <SelectItem value="Low Performance">Low Performance</SelectItem>
+            <SelectItem value="High Performer">High Performer (90–100)</SelectItem>
+            <SelectItem value="Stable Performer">Stable Performer (80–89.99)</SelectItem>
+            <SelectItem value="Need Improvement">Need Improvement (70–79.99)</SelectItem>
+            <SelectItem value="Low Performance">Low Performance (&lt;70)</SelectItem>
             <SelectItem value="No result">No result</SelectItem>
           </SelectContent>
         </Select>
@@ -491,7 +521,7 @@ export default function TutorMetric() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search tutor name..."
+            placeholder="Search teacher name..."
             className="pl-9"
           />
         </div>
@@ -567,34 +597,37 @@ export default function TutorMetric() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/50 border-b border-border text-xs text-muted-foreground uppercase">
                 <tr>
-                  <th className="px-4 py-3.5 text-left font-semibold">#</th>
-                  <th className="px-4 py-3.5 text-left font-semibold">Tutor Name</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Conducted</th>
+                  <th className="px-4 py-3.5 text-left font-semibold">Rating</th>
+                  <th className="px-4 py-3.5 text-left font-semibold">Teacher Name</th>
+                  <th className="px-4 py-3.5 text-left font-semibold">Team Leader</th>
                   <th className="px-4 py-3.5 text-center font-semibold">Attendance</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Discipline (75/25)</th>
+                  <th className="px-4 py-3.5 text-center font-semibold">Discipline</th>
                   <th className="px-4 py-3.5 text-center font-semibold">Quality (QC)</th>
                   <th className="px-4 py-3.5 text-center font-semibold">Complaint</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Composite</th>
                   <th className="px-4 py-3.5 text-right font-semibold">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-12 text-center text-muted-foreground text-sm">
+                    <td colSpan={8} className="py-12 text-center text-muted-foreground text-sm">
                       No tutor metrics found for the selected period.
                     </td>
                   </tr>
                 ) : (
                   filteredRows.map((row, idx) => (
                     <tr key={row.id} className="hover:bg-secondary/30 transition-colors">
-                      <td className="px-4 py-3.5 text-xs text-muted-foreground">{idx + 1}</td>
-                      <td className="px-4 py-3.5">
-                        <div className="font-semibold text-foreground">{row.tutorName}</div>
-                        <div className="text-[11px] text-muted-foreground">{row.role}</div>
+                      <td className="px-4 py-3.5 text-xs font-semibold text-muted-foreground">
+                        {idx + 1}
                       </td>
-                      <td className="px-4 py-3.5 text-center font-semibold text-foreground">
-                        {row.classesConducted}
+                      <td className="px-4 py-3.5">
+                        <div className="font-semibold text-foreground">{row.teacherName}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {row.classesConducted} conducted classes
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5 text-muted-foreground text-xs">
+                        {row.teamLeader}
                       </td>
                       <td className="px-4 py-3.5 text-center">
                         <div className="font-semibold text-teal-600">
@@ -602,34 +635,24 @@ export default function TutorMetric() {
                         </div>
                         {row.attendancePct !== null && (
                           <div className="text-[11px] text-muted-foreground">
-                            ({row.totalAttended}/{row.totalEnrolled} kids)
+                            ({row.totalAttended}/{row.totalExpected})
                           </div>
                         )}
                       </td>
                       <td className="px-4 py-3.5 text-center">
-                        <div className="font-semibold text-violet-600">
-                          {row.disciplinePct !== null ? `${row.disciplinePct.toFixed(2)}%` : '-'}
-                        </div>
-                        {row.disciplinePct !== null && (
-                          <div className="text-[11px] text-muted-foreground">
-                            (FB {row.fbPct !== null ? `${row.fbPct}%` : '-'} · Meet{' '}
-                            {row.meetPct !== null ? `${row.meetPct}%` : '-'})
-                          </div>
-                        )}
+                        <span
+                          className={`text-xs font-medium ${
+                            row.hasDisciplineIssue ? 'text-violet-600' : 'text-muted-foreground'
+                          }`}
+                        >
+                          {row.disciplineLabel}
+                        </span>
                       </td>
-                      <td className="px-4 py-3.5 text-center">
-                        <div className="font-semibold text-amber-600">
-                          {row.qualityScore !== null ? row.qualityScore : '-'}
-                        </div>
-                        {row.qcCount > 0 && (
-                          <div className="text-[11px] text-muted-foreground">
-                            ({row.qcCount} QC{row.qcCount > 1 ? 's' : ''})
-                          </div>
-                        )}
+                      <td className="px-4 py-3.5 text-center font-semibold text-amber-600">
+                        {row.qualityScore !== null ? row.qualityScore : '-'}
                       </td>
-                      <td className="px-4 py-3.5 text-center text-muted-foreground">{row.complaint}</td>
-                      <td className="px-4 py-3.5 text-center font-bold text-foreground">
-                        {row.compositeScore !== null ? `${row.compositeScore}%` : '-'}
+                      <td className="px-4 py-3.5 text-center text-muted-foreground">
+                        {row.complaint}
                       </td>
                       <td className="px-4 py-3.5 text-right">
                         <span
