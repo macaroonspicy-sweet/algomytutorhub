@@ -132,6 +132,30 @@ const parsePercentNumber = (val) => {
   return Number.isNaN(num) ? 0 : num;
 };
 
+// Jangan load/import jika persentase 0%, students_raw "0(0)", dan students_attended 0
+const shouldIgnoreZeroEmptyRecord = (record) => {
+  if (!record) return false;
+
+  const pct =
+    record.attendance_pct !== undefined && record.attendance_pct !== null
+      ? parsePercentNumber(record.attendance_pct)
+      : 0;
+
+  const compactRaw = String(record.students_raw ?? '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
+
+  const attended = Number(record.students_attended) || 0;
+
+  const isZeroPct = pct === 0;
+  const isZeroRaw = compactRaw === '0(0)' || compactRaw === '0' || compactRaw === '';
+  const isZeroAttended = attended === 0;
+
+  return isZeroPct && isZeroRaw && isZeroAttended;
+};
+
 // Jumlah siswa seharusnya:
 // - Ambil angka utama dari students_raw atau students_count jika > 0
 // - Jika terbaca 0 (misal "0(0)" karena siswa di-expelled) namun ada siswa hadir (attended >= 1), anggap minimal attended (1)
@@ -257,11 +281,13 @@ const resolveLessonTitle = (row, groupTitle = '', lessonNumber = null) => {
   }
 
   const cleanGroup = String(groupTitle || '').trim();
-  if (cleanGroup && lessonNumber) {
+  if (cleanGroup && lessonNumber !== null && lessonNumber !== undefined) {
     return `${cleanGroup} — Lesson ${lessonNumber}`;
   }
   if (cleanGroup) return cleanGroup;
-  if (lessonNumber) return `Lesson ${lessonNumber}`;
+  if (lessonNumber !== null && lessonNumber !== undefined) {
+    return `Lesson ${lessonNumber}`;
+  }
   return 'Untitled Lesson';
 };
 
@@ -445,7 +471,7 @@ export default function TutorAdmin() {
         if (error) throw error;
         if (count !== null) setTotalDbRows(count);
         if (!data || data.length === 0) break;
-        allSched = allSched.concat(data);
+        allSched = allSched.concat(data.filter((r) => !shouldIgnoreZeroEmptyRecord(r)));
         if (data.length < step) break;
         from += step;
       }
@@ -494,7 +520,29 @@ export default function TutorAdmin() {
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
-      setParsedPreviewCount(Array.isArray(rows) ? rows.length : 0);
+      const validRows = Array.isArray(rows)
+        ? rows.filter((row) => {
+            const pct = parsePercentNumber(
+              pickCell(row, ['S Lesson status', 'Lesson status', 'attendance_pct', 'status', 'Status'])
+            );
+            const raw = String(pickCell(row, ['Students', 'students_raw', 'enrolled']) || '');
+            const att =
+              Number(
+                pickCell(row, [
+                  ' Students that attended',
+                  'Students that attended',
+                  'students_attended',
+                  'attended',
+                ])
+              ) || 0;
+            return !shouldIgnoreZeroEmptyRecord({
+              attendance_pct: pct,
+              students_raw: raw,
+              students_attended: att,
+            });
+          })
+        : [];
+      setParsedPreviewCount(validRows.length);
     } catch {
       setParsedPreviewCount(0);
     }
@@ -526,6 +574,45 @@ export default function TutorAdmin() {
 
       const mappedRows = rows
         .map((row, idx) => {
+          const rawStatus = pickCell(row, [
+            'S Lesson status',
+            'Lesson status',
+            'is_conducted',
+            'conducted',
+            'Conducted',
+            'status',
+            'Status',
+          ]);
+          const statusPct = parsePercentNumber(rawStatus);
+          const rawConductedStr = String(rawStatus ?? '').trim().toLowerCase();
+
+          const studentsRaw = String(
+            pickCell(row, ['Students', 'students_raw', 'enrolled'])
+          )
+            .replace(/\u00a0/g, ' ')
+            .trim();
+          const studentsAttended =
+            Number(
+              pickCell(row, [
+                ' Students that attended',
+                'Students that attended',
+                'students_attended',
+                'attended',
+                'Attended',
+                'present',
+              ])
+            ) || 0;
+
+          if (
+            shouldIgnoreZeroEmptyRecord({
+              attendance_pct: statusPct,
+              students_raw: studentsRaw,
+              students_attended: studentsAttended,
+            })
+          ) {
+            return null;
+          }
+
           const rawDatetime = pickCell(row, [
             'lesson_datetime',
             'Lesson Datetime',
@@ -628,35 +715,6 @@ export default function TutorAdmin() {
             ])
           ).trim();
 
-          const rawStatus = pickCell(row, [
-            'S Lesson status',
-            'Lesson status',
-            'is_conducted',
-            'conducted',
-            'Conducted',
-            'status',
-            'Status',
-          ]);
-          const statusPct = parsePercentNumber(rawStatus);
-          const rawConductedStr = String(rawStatus ?? '').trim().toLowerCase();
-
-          const studentsRaw = String(
-            pickCell(row, ['Students', 'students_raw', 'enrolled'])
-          )
-            .replace(/\u00a0/g, ' ')
-            .trim();
-          const studentsAttended =
-            Number(
-              pickCell(row, [
-                ' Students that attended',
-                'Students that attended',
-                'students_attended',
-                'attended',
-                'Attended',
-                'present',
-              ])
-            ) || 0;
-
           const parsedRawCount = parseLeadingInt(studentsRaw);
           const expectedStudents =
             parsedRawCount > 0 ? parsedRawCount : studentsAttended >= 1 ? studentsAttended : 0;
@@ -711,7 +769,7 @@ export default function TutorAdmin() {
             updated_date: new Date().toISOString(),
           };
         })
-        .filter(Boolean);
+        .filter((r) => r && !shouldIgnoreZeroEmptyRecord(r));
 
       if (mappedRows.length === 0) {
         toast.warning('No valid schedule rows matched the expected columns');
@@ -758,6 +816,7 @@ export default function TutorAdmin() {
 
   const filteredSchedules = useMemo(() => {
     return schedules.filter((r) => {
+      if (shouldIgnoreZeroEmptyRecord(r)) return false;
       if (!showTestGroups && r.is_test_group) return false;
       if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
       if (selectedMonth !== 'all' && String(r.lesson_month) !== selectedMonth) return false;
@@ -1700,7 +1759,7 @@ export default function TutorAdmin() {
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {(selectedImportFile.size / 1024).toFixed(1)} KB ·{' '}
-                    <strong className="text-foreground">{parsedPreviewCount}</strong> rows detected
+                    <strong className="text-foreground">{parsedPreviewCount}</strong> valid rows detected
                   </div>
                   <div className="flex items-center justify-center gap-2 pt-1">
                     <Button
@@ -1740,7 +1799,7 @@ export default function TutorAdmin() {
                 <code className="text-foreground">lesson_date</code>,{' '}
                 <code className="text-foreground">lesson_time</code>,{' '}
                 <code className="text-foreground">week_label</code>,{' '}
-                <code className="text-foreground">lesson_title</code> (from Next lesson), plus attendance &amp; course fields.
+                <code className="text-foreground">lesson_title</code> (from Next lesson), plus attendance &amp; course fields. Rows with 0%, 0(0), and 0 attended are skipped.
               </div>
             </div>
 
