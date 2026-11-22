@@ -130,11 +130,45 @@ const getWeekBucket = (dateStr) => {
   return 'W4';
 };
 
+const getCourseLabel = (r) => {
+  const direct =
+    r.course_name ||
+    r.course ||
+    r.program_name ||
+    r.program ||
+    r.subject ||
+    r.track ||
+    r.course_title;
+  if (direct && String(direct).trim()) return String(direct).trim();
+
+  // Fallback ekstraksi dari group_code bila kolom course kosong (misal: "MY 1-1 VP 020" -> "VP")
+  const code = String(r.group_code || '').trim();
+  const match = code.match(/\b(VP|PS|PP|GDJ|GDS|GD|RB|DL|BW|AI|WEB|PY)\b/i);
+  if (match) return match[1].toUpperCase();
+
+  return 'Uncategorized';
+};
+
 const normalizeFormat = (raw) => {
   const f = String(raw || '').toLowerCase();
   if (f.includes('intens')) return 'Intensive';
-  if (f.includes('indiv') || f.includes('1-1') || f.includes('private')) return 'Individual';
+  if (f.includes('indiv') || f.includes('1-1') || f.includes('1on1') || f.includes('private')) {
+    return 'Individual';
+  }
   return 'Group';
+};
+
+const getGroupFormat = (r) => {
+  const rawFormat =
+    r.group_format ||
+    r.course_format ||
+    r.class_format ||
+    r.format ||
+    r.class_type ||
+    r.type ||
+    r.group_code ||
+    '';
+  return normalizeFormat(rawFormat);
 };
 
 function MiniSparkline({ data, dataKey = 'value', stroke = '#6366f1' }) {
@@ -261,27 +295,22 @@ export default function TutorAdmin() {
       }
       setSchedules(allSched);
 
-      const [
-        { data: fbData, error: fbErr },
-        { data: meetData, error: meetErr },
-        { data: attData, error: attErr },
-        { data: qcData, error: qcErr },
-      ] = await Promise.all([
+      const [fbRes, meetRes, attRes, qcRes] = await Promise.all([
         supabase.from('WeeklyFeedbackAssignment').select('*'),
-        supabase.from('TutorMeeting').select('id, meeting_date, title'),
-        supabase.from('TutorMeetingAttendance').select('meeting_id, tutor_id, tutor_name, status'),
+        supabase.from('TutorMeeting').select('*'),
+        supabase.from('TutorMeetingAttendance').select('*'),
         supabase.from('QCRecord').select('*'),
       ]);
 
-      if (fbErr) throw fbErr;
-      if (meetErr) throw meetErr;
-      if (attErr) throw attErr;
-      if (qcErr) throw qcErr;
+      if (fbRes.error) console.error('WeeklyFeedbackAssignment error:', fbRes.error);
+      if (meetRes.error) console.error('TutorMeeting error:', meetRes.error);
+      if (attRes.error) console.error('TutorMeetingAttendance error:', attRes.error);
+      if (qcRes.error) console.error('QCRecord error:', qcRes.error);
 
-      setFeedbackAssignments(fbData || []);
-      setMeetings(meetData || []);
-      setMeetingAttendances(attData || []);
-      setQcRecords((qcData || []).filter((q) => !q.is_sample));
+      setFeedbackAssignments(fbRes.data || []);
+      setMeetings(meetRes.data || []);
+      setMeetingAttendances(attRes.data || []);
+      setQcRecords((qcRes.data || []).filter((q) => !q.is_sample));
     } catch (err) {
       toast.error('Failed to load Tutor Administration data', { description: err.message });
     } finally {
@@ -296,7 +325,8 @@ export default function TutorAdmin() {
   const courseOptions = useMemo(() => {
     const set = new Set();
     schedules.forEach((s) => {
-      if (s.course_name) set.add(s.course_name);
+      const c = getCourseLabel(s);
+      if (c && c !== 'Uncategorized') set.add(c);
     });
     return Array.from(set).sort();
   }, [schedules]);
@@ -316,11 +346,11 @@ export default function TutorAdmin() {
       if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
       if (selectedMonth !== 'all' && String(r.lesson_month) !== selectedMonth) return false;
       if (selectedWeek !== 'all' && getWeekBucket(r.lesson_date) !== selectedWeek) return false;
-      if (selectedCourse !== 'all' && r.course_name !== selectedCourse) return false;
+      if (selectedCourse !== 'all' && getCourseLabel(r) !== selectedCourse) return false;
       if (selectedTutor !== 'all' && !isSameTutor(r.lesson_teacher, selectedTutor)) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${r.course_name || ''}`.toLowerCase();
+        const hay = `${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${getCourseLabel(r)}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -375,7 +405,7 @@ export default function TutorAdmin() {
       let enr = 0;
 
       items.forEach((r) => {
-        const fmt = normalizeFormat(r.group_format || r.course_format);
+        const fmt = getGroupFormat(r);
         if (fmt === 'Group') group += 1;
         else if (fmt === 'Individual') indiv += 1;
         else intensive += 1;
@@ -405,15 +435,16 @@ export default function TutorAdmin() {
     let fourthLessonCount = 0;
 
     filteredSchedules.forEach((r) => {
-      const classKey = r.group_code || r.group_id || `${r.course_name}-${r.lesson_teacher}-${r.id}`;
+      const cName = getCourseLabel(r);
+      const classKey = r.group_code || r.group_id || `${cName}-${r.lesson_teacher}-${r.id}`;
       const kids = parseEnrolledCount(r);
       if (!classMap.has(classKey)) {
         classMap.set(classKey, {
           classKey,
           groupCode: r.group_code || '-',
-          courseName: r.course_name || 'Unknown',
+          courseName: cName,
           teacher: r.lesson_teacher || '-',
-          format: normalizeFormat(r.group_format || r.course_format),
+          format: getGroupFormat(r),
           kids,
           conducted: r.is_conducted ? 1 : 0,
         });
@@ -426,7 +457,7 @@ export default function TutorAdmin() {
       const lNum = Number(r.lesson_number);
       if (lNum === 1) {
         lesson1Count += 1;
-        if (r.course_name) lesson1Courses.add(r.course_name);
+        if (cName && cName !== 'Uncategorized') lesson1Courses.add(cName);
       }
       if (!Number.isNaN(lNum) && lNum > 0 && lNum % 4 === 0) {
         fourthLessonCount += 1;
@@ -474,7 +505,10 @@ export default function TutorAdmin() {
       if (a.is_sample) return false;
       if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
       if (!isLessonFourMultiple(a)) return false;
-      if (selectedCourse !== 'all' && a.course_name && a.course_name !== selectedCourse) return false;
+      const aCourse = getCourseLabel(a);
+      if (selectedCourse !== 'all' && aCourse !== 'Uncategorized' && aCourse !== selectedCourse) {
+        return false;
+      }
       if (selectedTutor !== 'all' && !isSameTutor(a.tutor_name, selectedTutor)) return false;
 
       if (a.week_start_date) {
@@ -603,7 +637,10 @@ export default function TutorAdmin() {
       if (q.evaluation_score === null || q.evaluation_score === undefined) return false;
       if (targetYear !== null && Number(q.period_year) !== targetYear) return false;
       if (targetMonth !== null && Number(q.period_month) !== targetMonth) return false;
-      if (selectedCourse !== 'all' && q.course_name && q.course_name !== selectedCourse) return false;
+      const qCourse = getCourseLabel(q);
+      if (selectedCourse !== 'all' && qCourse !== 'Uncategorized' && qCourse !== selectedCourse) {
+        return false;
+      }
       if (selectedTutor !== 'all' && !isSameTutor(q.tutor_name, selectedTutor)) return false;
       return true;
     });
@@ -1118,7 +1155,7 @@ export default function TutorAdmin() {
                       <tr key={r.id}>
                         <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
                         <td className="py-2.5 font-medium text-foreground">{r.group_code || '-'}</td>
-                        <td className="py-2.5 text-muted-foreground">{r.course_name}</td>
+                        <td className="py-2.5 text-muted-foreground">{getCourseLabel(r)}</td>
                         <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
                         <td className="py-2.5 text-right font-semibold">{parseEnrolledCount(r)}</td>
                       </tr>
@@ -1146,7 +1183,7 @@ export default function TutorAdmin() {
                     <tr key={r.id}>
                       <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
                       <td className="py-2.5 font-medium text-foreground">{r.group_code || '-'}</td>
-                      <td className="py-2.5 text-muted-foreground">{r.course_name}</td>
+                      <td className="py-2.5 text-muted-foreground">{getCourseLabel(r)}</td>
                       <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
                       <td className="py-2.5 text-center">{r.lesson_number ?? '-'}</td>
                       <td className="py-2.5 text-right font-semibold">
