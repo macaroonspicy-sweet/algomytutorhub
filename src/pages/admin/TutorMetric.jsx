@@ -40,6 +40,10 @@ const MONTHS = [
 const FEEDBACK_WEIGHT = 0.75;
 const MEETING_WEIGHT = 0.25;
 
+// Bobot poin per item feedback (maksimal 100 jika tepat waktu)
+const ON_TIME_POINTS = 100;
+const DONE_OVERDUE_POINTS = 75;
+
 const normalizeName = (name) =>
   (name || '')
     .toLowerCase()
@@ -78,9 +82,20 @@ const isLessonFourMultiple = (assignment) => {
   return true;
 };
 
-const isAssignmentCompleted = (assignment) =>
-  assignment.is_done === true ||
-  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+// Mengembalikan bobot poin (100 / 75 / 0) per assignment feedback
+const getFeedbackItemScore = (assignment) => {
+  const status = String(assignment.status || '').trim().toLowerCase();
+  if (status === 'done_overdue' || assignment.is_overdue === true && (assignment.is_done === true || status.includes('done'))) {
+    return DONE_OVERDUE_POINTS;
+  }
+  if (
+    assignment.is_done === true ||
+    ['completed', 'done', 'on_time', 'ontime'].includes(status)
+  ) {
+    return ON_TIME_POINTS;
+  }
+  return 0;
+};
 
 const parseEnrolledCount = (r) => {
   const rawMatch = String(r.students_raw || '').replace(/\u00a0/g, ' ').trim().match(/^(\d+)/);
@@ -139,7 +154,7 @@ export default function TutorMetric() {
           .in('role', ['Tutor', 'Team Leader'])
           .order('full_name', { ascending: true }),
         supabase.from('WeeklyFeedbackAssignment').select('*'),
-        supabase.from('TutorMeeting').select('id, meeting_date, title'),
+        supabase.from('TutorMeeting').select('id, meeting_date'),
         supabase.from('TutorMeetingAttendance').select('meeting_id, tutor_id, tutor_name, status'),
         supabase.from('QCRecord').select('*'),
       ]);
@@ -245,14 +260,21 @@ export default function TutorMetric() {
           ? Number(((totalAttended / totalEnrolled) * 100).toFixed(2))
           : null;
 
-      // 2. Discipline (75% Monthly Feedback + 25% Meeting Presence)
+      // 2. Discipline (75% Monthly Feedback dengan pengurangan done_overdue + 25% Meeting Presence)
       const myFb = monthAssignments.filter(
         (a) => (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName)
       );
-      const fbPct =
-        myFb.length > 0
-          ? Number(((myFb.filter(isAssignmentCompleted).length / myFb.length) * 100).toFixed(1))
-          : null;
+      let fbPct = null;
+      let doneOverdueCount = 0;
+      if (myFb.length > 0) {
+        let totalFbScore = 0;
+        myFb.forEach((item) => {
+          const itemScore = getFeedbackItemScore(item);
+          if (itemScore === DONE_OVERDUE_POINTS) doneOverdueCount += 1;
+          totalFbScore += itemScore;
+        });
+        fbPct = Number((totalFbScore / myFb.length).toFixed(1));
+      }
 
       const myMeetAtt = meetingAttendances.filter(
         (att) =>
@@ -316,6 +338,7 @@ export default function TutorMetric() {
         totalEnrolled,
         attendancePct,
         fbPct,
+        doneOverdueCount,
         meetPct,
         disciplinePct,
         qualityScore,
@@ -379,6 +402,7 @@ export default function TutorMetric() {
         'Student Ratio': `${r.totalAttended}/${r.totalEnrolled}`,
         'Discipline (%)': r.disciplinePct !== null ? r.disciplinePct : '-',
         'Feedback (75%)': r.fbPct !== null ? `${r.fbPct}%` : '-',
+        'Done Overdue Count': r.doneOverdueCount,
         'Meeting (25%)': r.meetPct !== null ? `${r.meetPct}%` : '-',
         'Quality (QC)': r.qualityScore !== null ? r.qualityScore : '-',
         Complaint: r.complaint,
