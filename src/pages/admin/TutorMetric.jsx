@@ -10,15 +10,16 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  BarChart3,
-  Search,
-  FileSpreadsheet,
-  Loader2,
+  Activity,
   Users,
   CalendarCheck,
   Percent,
   ShieldCheck,
-  Award,
+  Star,
+  Search,
+  FileSpreadsheet,
+  Loader2,
+  ArrowUpDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -39,8 +40,9 @@ const MONTHS = [
 
 const FEEDBACK_WEIGHT = 0.75;
 const MEETING_WEIGHT = 0.25;
-const ON_TIME_POINTS = 100;
-const DONE_OVERDUE_POINTS = 75;
+
+// Set ke true jika QC score selalu diambil dari bulan sebelumnya
+const USE_PREV_MONTH_FOR_QC = false;
 
 const normalizeName = (name) =>
   (name || '')
@@ -80,60 +82,90 @@ const isLessonFourMultiple = (assignment) => {
   return true;
 };
 
-const getFeedbackItemScore = (assignment) => {
-  const status = String(assignment.status || '').trim().toLowerCase();
-  if (
-    status === 'done_overdue' ||
-    (assignment.is_overdue === true && (assignment.is_done === true || status.includes('done')))
-  ) {
-    return DONE_OVERDUE_POINTS;
-  }
+const getFeedbackScore = (assignment) => {
+  const st = String(assignment.status || '').trim().toLowerCase();
+  if (st === 'done_overdue' || st === 'overdue_done' || st === 'late') return 75;
   if (
     assignment.is_done === true ||
-    ['completed', 'done', 'on_time', 'ontime'].includes(status)
+    st === 'completed' ||
+    st === 'done' ||
+    st === 'submitted'
   ) {
-    return ON_TIME_POINTS;
+    return 100;
   }
   return 0;
 };
 
+const parseLeadingInt = (val) => {
+  const cleaned = String(val ?? '').replace(/\u00a0/g, ' ').trim();
+  const match = cleaned.match(/^(\d+)/);
+  return match ? Number(match[1]) : 0;
+};
+
+const parsePercentNumber = (val) => {
+  const cleaned = String(val ?? '').replace('%', '').trim();
+  const num = Number(cleaned);
+  return Number.isNaN(num) ? 0 : num;
+};
+
+// Jumlah siswa seharusnya:
+// - Ambil dari students_raw atau students_count jika > 0
+// - Jika terbaca 0 (misal "0(0)" karena expelled) namun ada siswa hadir (attended >= 1), anggap minimal attended (1)
 const parseExpectedStudentsCount = (r) => {
-  const rawMatch = String(r.students_raw || '').replace(/\u00a0/g, ' ').trim().match(/^(\d+)/);
-  if (rawMatch) {
-    const parsed = Number(rawMatch[1]);
-    if (parsed > 0) return parsed;
-  }
+  const rawCount = parseLeadingInt(r.students_raw);
+  if (rawCount > 0) return rawCount;
+
   const direct = Number(r.students_count);
   if (!Number.isNaN(direct) && direct > 0) return direct;
+
+  const attended = Number(r.students_attended) || 0;
+  if (attended >= 1) return attended;
+
   return 0;
 };
 
-const getStatusFromScore = (score) => {
-  if (score === null || score === undefined) return 'No result';
-  if (score >= 90) return 'High Performer';
-  if (score >= 80) return 'Stable Performer';
-  if (score >= 70) return 'Need Improvement';
-  return 'Low Performance';
+const isLessonConducted = (r) => {
+  const attended = Number(r.students_attended) || 0;
+  if (r.is_conducted === true) return attended >= 1;
+  if (r.is_conducted === false) return false;
+  const pct = parsePercentNumber(r.attendance_pct);
+  return pct > 0 && attended >= 1;
 };
 
-const getPerformanceBadge = (status) => {
-  switch (status) {
-    case 'High Performer':
-      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    case 'Stable Performer':
-      return 'bg-blue-50 text-blue-700 border-blue-200';
-    case 'Need Improvement':
-      return 'bg-amber-50 text-amber-700 border-amber-200';
-    case 'Low Performance':
-      return 'bg-rose-50 text-rose-700 border-rose-200';
-    default:
-      return 'bg-secondary text-muted-foreground border-border';
+const getPerformanceStatus = (score) => {
+  if (score === null || score === undefined || Number.isNaN(score)) {
+    return {
+      label: 'No Data',
+      badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+    };
   }
+  if (score >= 90) {
+    return {
+      label: 'High Performer',
+      badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    };
+  }
+  if (score >= 80) {
+    return {
+      label: 'Stable Performer',
+      badgeClass: 'bg-sky-50 text-sky-700 border-sky-200',
+    };
+  }
+  if (score >= 70) {
+    return {
+      label: 'Need Improvement',
+      badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+    };
+  }
+  return {
+    label: 'Low Performance',
+    badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+  };
 };
 
 export default function TutorMetric() {
   const [loading, setLoading] = useState(true);
-  const [tutors, setTutors] = useState([]);
+  const [users, setUsers] = useState([]);
   const [schedules, setSchedules] = useState([]);
   const [feedbackAssignments, setFeedbackAssignments] = useState([]);
   const [meetings, setMeetings] = useState([]);
@@ -142,46 +174,20 @@ export default function TutorMetric() {
 
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
-  const [qcPeriodMode, setQcPeriodMode] = useState('prev'); // 'prev' (Last month SOP) | 'current'
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [selectedStatus, setSelectedStatus] = useState('all');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('composite_desc');
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [
-        { data: userData, error: userErr },
-        { data: fbData, error: fbErr },
-        { data: meetData, error: meetErr },
-        { data: attData, error: attErr },
-        { data: qcData, error: qcErr },
-      ] = await Promise.all([
-        supabase
-          .from('CustomUser')
-          .select('id, full_name, username, role, taught_courses')
-          .in('role', ['Tutor', 'Team Leader'])
-          .order('full_name', { ascending: true }),
-        supabase.from('WeeklyFeedbackAssignment').select('*'),
-        supabase.from('TutorMeeting').select('id, meeting_date'),
-        supabase.from('TutorMeetingAttendance').select('meeting_id, tutor_id, tutor_name, status'),
-        supabase.from('QCRecord').select('*'),
-      ]);
-
-      if (userErr) throw userErr;
-      if (fbErr) throw fbErr;
-      if (meetErr) throw meetErr;
-      if (attErr) throw attErr;
-      if (qcErr) throw qcErr;
-
       let allSched = [];
       let from = 0;
       const step = 1000;
       while (true) {
         const { data, error } = await supabase
           .from('BoScheduleRecord')
-          .select(
-            'id, lesson_teacher, lesson_month, lesson_year, attendance_pct, students_count, students_raw, students_attended, is_conducted, is_test_group'
-          )
+          .select('*')
           .range(from, from + step - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
@@ -189,15 +195,29 @@ export default function TutorMetric() {
         if (data.length < step) break;
         from += step;
       }
-
-      setTutors(userData || []);
       setSchedules(allSched);
-      setFeedbackAssignments(fbData || []);
-      setMeetings(meetData || []);
-      setMeetingAttendances(attData || []);
-      setQcRecords((qcData || []).filter((q) => !q.is_sample));
+
+      const [userRes, fbRes, meetRes, attRes, qcRes] = await Promise.all([
+        supabase.from('CustomUser').select('*'),
+        supabase.from('WeeklyFeedbackAssignment').select('*'),
+        supabase.from('TutorMeeting').select('*'),
+        supabase.from('TutorMeetingAttendance').select('*'),
+        supabase.from('QCRecord').select('*'),
+      ]);
+
+      if (userRes.error) console.error('CustomUser error:', userRes.error);
+      if (fbRes.error) console.error('WeeklyFeedbackAssignment error:', fbRes.error);
+      if (meetRes.error) console.error('TutorMeeting error:', meetRes.error);
+      if (attRes.error) console.error('TutorMeetingAttendance error:', attRes.error);
+      if (qcRes.error) console.error('QCRecord error:', qcRes.error);
+
+      setUsers(userRes.data || []);
+      setFeedbackAssignments(fbRes.data || []);
+      setMeetings(meetRes.data || []);
+      setMeetingAttendances(attRes.data || []);
+      setQcRecords((qcRes.data || []).filter((q) => !q.is_sample));
     } catch (err) {
-      toast.error('Failed to load Tutor Metric data', { description: err.message });
+      toast.error('Failed to load Tutor Metrics', { description: err.message });
     } finally {
       setLoading(false);
     }
@@ -207,180 +227,173 @@ export default function TutorMetric() {
     loadData();
   }, []);
 
-  const metricRows = useMemo(() => {
-    const mNum = Number(selectedMonth);
-    const yNum = Number(selectedYear);
+  const tutorMetricsList = useMemo(() => {
+    // 1. Kumpulkan daftar unik tutor dari CustomUser + jadwal + feedback + QC
+    const tutorNames = [];
+    const pushUniqueTutor = (rawName) => {
+      const trimmed = String(rawName || '').trim();
+      if (!trimmed) return;
+      const exists = tutorNames.some((existing) => isSameTutor(existing, trimmed));
+      if (!exists) tutorNames.push(trimmed);
+    };
 
-    const qcTargetMonth =
-      qcPeriodMode === 'prev' ? (mNum === 1 ? 12 : mNum - 1) : mNum;
-    const qcTargetYear =
-      qcPeriodMode === 'prev' ? (mNum === 1 ? yNum - 1 : yNum) : yNum;
+    users
+      .filter((u) => {
+        const role = String(u.role || u.user_role || '').toLowerCase();
+        return !role || role.includes('tutor') || role.includes('teacher') || role.includes('lead');
+      })
+      .forEach((u) => pushUniqueTutor(u.full_name || u.name || u.tutor_name));
 
-    const validMeetingIds = new Set(
-      meetings
-        .filter((m) => {
-          if (!m.meeting_date) return false;
-          const [y, mStr] = m.meeting_date.split('-');
-          return Number(y) === yNum && Number(mStr) === mNum;
-        })
-        .map((m) => m.id)
-    );
+    schedules.forEach((s) => {
+      if (s.is_test_group) return;
+      if (selectedYear !== 'all' && String(s.lesson_year) !== selectedYear) return;
+      if (selectedMonth !== 'all' && String(s.lesson_month) !== selectedMonth) return;
+      pushUniqueTutor(s.lesson_teacher);
+    });
 
-    const monthSchedules = schedules.filter(
-      (r) =>
-        !r.is_test_group &&
-        r.is_conducted &&
-        (Number(r.students_attended) || 0) >= 1 &&
-        Number(r.lesson_month) === mNum &&
-        Number(r.lesson_year) === yNum
-    );
+    feedbackAssignments.forEach((a) => {
+      if (a.is_sample) return;
+      pushUniqueTutor(a.tutor_name);
+    });
 
-    const monthAssignments = feedbackAssignments.filter((a) => {
+    qcRecords.forEach((q) => {
+      pushUniqueTutor(q.tutor_name);
+    });
+
+    // 2. Filter jadwal periode aktif
+    const periodSchedules = schedules.filter((r) => {
+      if (r.is_test_group) return false;
+      if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
+      if (selectedMonth !== 'all' && String(r.lesson_month) !== selectedMonth) return false;
+      return true;
+    });
+
+    // 3. Filter feedback periode aktif
+    const periodFeedbacks = feedbackAssignments.filter((a) => {
       if (a.is_sample) return false;
       if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
       if (!isLessonFourMultiple(a)) return false;
       if (a.week_start_date) {
         const [ay, am] = a.week_start_date.split('-');
-        return Number(ay) === yNum && Number(am) === mNum;
+        if (selectedYear !== 'all' && ay !== selectedYear) return false;
+        if (selectedMonth !== 'all' && String(Number(am)) !== selectedMonth) return false;
       }
       return true;
     });
 
-    const targetQcs = qcRecords.filter(
-      (q) =>
-        q.evaluation_score !== null &&
-        q.evaluation_score !== undefined &&
-        Number(q.period_month) === qcTargetMonth &&
-        Number(q.period_year) === qcTargetYear
-    );
+    // 4. Filter meeting periode aktif
+    const validMeetingIds = new Set();
+    meetings.forEach((m) => {
+      if (!m.meeting_date) return;
+      const [y, mStr] = m.meeting_date.split('-');
+      if (selectedYear !== 'all' && y !== selectedYear) return;
+      if (selectedMonth !== 'all' && String(Number(mStr)) !== selectedMonth) return;
+      validMeetingIds.add(m.id);
+    });
+    const periodMeetAtts = meetingAttendances.filter((att) => validMeetingIds.has(att.meeting_id));
 
-    const rows = tutors.map((tutor) => {
-      const tName = tutor.full_name || tutor.username || '';
-      const tId = tutor.id;
+    // 5. Filter QC periode aktif
+    let qcTargetMonth = selectedMonth === 'all' ? null : Number(selectedMonth);
+    let qcTargetYear = selectedYear === 'all' ? null : Number(selectedYear);
+    if (USE_PREV_MONTH_FOR_QC && qcTargetMonth !== null && qcTargetYear !== null) {
+      qcTargetMonth -= 1;
+      if (qcTargetMonth === 0) {
+        qcTargetMonth = 12;
+        qcTargetYear -= 1;
+      }
+    }
+    const periodQcs = qcRecords.filter((q) => {
+      if (q.evaluation_score === null || q.evaluation_score === undefined) return false;
+      if (qcTargetYear !== null && Number(q.period_year) !== qcTargetYear) return false;
+      if (qcTargetMonth !== null && Number(q.period_month) !== qcTargetMonth) return false;
+      return true;
+    });
 
-      // 1. Attendance Ratio = (totalAttended / totalExpected) * 100%
-      const myScheds = monthSchedules.filter((r) => isSameTutor(r.lesson_teacher, tName));
-      const classesConducted = myScheds.length;
-      const totalAttended = myScheds.reduce((s, r) => s + (Number(r.students_attended) || 0), 0);
-      const totalExpected = myScheds.reduce((s, r) => s + parseExpectedStudentsCount(r), 0);
+    return tutorNames.map((tutorName) => {
+      // A. Conducted & Attendance Ratio
+      const tSchedules = periodSchedules.filter((r) => isSameTutor(r.lesson_teacher, tutorName));
+      const tConductedList = tSchedules.filter(isLessonConducted);
+      const conductedCount = tConductedList.length;
+
+      const totalAttended = tConductedList.reduce(
+        (sum, r) => sum + (Number(r.students_attended) || 0),
+        0
+      );
+      const totalExpected = tConductedList.reduce(
+        (sum, r) => sum + parseExpectedStudentsCount(r),
+        0
+      );
       const attendancePct =
-        classesConducted > 0 && totalExpected > 0
-          ? Number(((totalAttended / totalExpected) * 100).toFixed(2))
+        conductedCount > 0 && totalExpected > 0
+          ? Number(((totalAttended / totalExpected) * 100).toFixed(1))
           : null;
 
-      // 2. Discipline (75% Monthly Feedback dengan penalti done_overdue + 25% Meeting Presence)
-      const myFb = monthAssignments.filter(
-        (a) => (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName)
-      );
-      let fbPct = null;
-      let doneOverdueCount = 0;
-      let missedOrOverdueFeedback = 0;
-      if (myFb.length > 0) {
-        let totalFbScore = 0;
-        myFb.forEach((item) => {
-          const itemScore = getFeedbackItemScore(item);
-          if (itemScore === DONE_OVERDUE_POINTS) doneOverdueCount += 1;
-          if (itemScore < ON_TIME_POINTS) missedOrOverdueFeedback += 1;
-          totalFbScore += itemScore;
-        });
-        fbPct = Number((totalFbScore / myFb.length).toFixed(1));
-      }
+      // B. Discipline (75% Monthly Feedback + 25% Meeting Presence)
+      const tFb = periodFeedbacks.filter((a) => isSameTutor(a.tutor_name, tutorName));
+      const fbPct =
+        tFb.length > 0
+          ? Number((tFb.reduce((s, a) => s + getFeedbackScore(a), 0) / tFb.length).toFixed(1))
+          : null;
 
-      const myMeetAtt = meetingAttendances.filter(
-        (att) =>
-          validMeetingIds.has(att.meeting_id) &&
-          (att.tutor_id === tId || isSameTutor(att.tutor_name, tName))
-      );
+      const tMeet = periodMeetAtts.filter((att) => isSameTutor(att.tutor_name, tutorName));
       let meetPct = null;
-      let absentMeetingCount = 0;
-      if (myMeetAtt.length > 0) {
-        const present = myMeetAtt.filter(
-          (r) => normalizeAttendanceStatus(r.status) === 'Present'
-        ).length;
-        const excused = myMeetAtt.filter(
-          (r) => normalizeAttendanceStatus(r.status) === 'Excused'
-        ).length;
-        absentMeetingCount = myMeetAtt.filter(
-          (r) => normalizeAttendanceStatus(r.status) === 'Absent'
-        ).length;
-        meetPct = Number((((present * 1 + excused * 0.75) / myMeetAtt.length) * 100).toFixed(1));
+      if (tMeet.length > 0) {
+        const present = tMeet.filter((r) => normalizeAttendanceStatus(r.status) === 'Present').length;
+        const excused = tMeet.filter((r) => normalizeAttendanceStatus(r.status) === 'Excused').length;
+        meetPct = Number((((present * 1 + excused * 0.75) / tMeet.length) * 100).toFixed(1));
       }
 
       let disciplinePct = null;
       if (fbPct !== null && meetPct !== null) {
-        disciplinePct = Number((fbPct * FEEDBACK_WEIGHT + meetPct * MEETING_WEIGHT).toFixed(2));
+        disciplinePct = Number((fbPct * FEEDBACK_WEIGHT + meetPct * MEETING_WEIGHT).toFixed(1));
       } else if (fbPct !== null) {
-        disciplinePct = Number(fbPct.toFixed(2));
+        disciplinePct = fbPct;
       } else if (meetPct !== null) {
-        disciplinePct = Number(meetPct.toFixed(2));
+        disciplinePct = meetPct;
       }
 
-      const hasDisciplineIssue =
-        (fbPct !== null && fbPct < 100) ||
-        (meetPct !== null && meetPct < 100) ||
-        missedOrOverdueFeedback > 0 ||
-        absentMeetingCount > 0;
-      const disciplineLabel = !hasDisciplineIssue
-        ? 'No discipline'
-        : `${disciplinePct !== null ? `${disciplinePct}%` : 'Issue'}${
-            doneOverdueCount > 0 ? ` (${doneOverdueCount} overdue)` : ''
-          }`;
-
-      // 3. Quality (QC)
-      const myQcs = targetQcs.filter(
-        (q) => (q.tutor_id && q.tutor_id === tId) || isSameTutor(q.tutor_name, tName)
-      );
-      const qualityScore =
-        myQcs.length > 0
+      // C. Quality (QC Score)
+      const tQc = periodQcs.filter((q) => isSameTutor(q.tutor_name, tutorName));
+      const qcAvg =
+        tQc.length > 0
           ? Number(
               (
-                myQcs.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) / myQcs.length
+                tQc.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) / tQc.length
               ).toFixed(1)
             )
           : null;
 
-      // 4. Composite Score & Status
-      const activeScores = [attendancePct, qualityScore].filter((v) => v !== null);
+      // D. Composite Score (rata-rata komponen aktif yang tersedia)
+      const components = [attendancePct, disciplinePct, qcAvg].filter(
+        (v) => v !== null && v !== undefined && !Number.isNaN(v)
+      );
       const compositeScore =
-        activeScores.length > 0
-          ? Number((activeScores.reduce((a, b) => a + b, 0) / activeScores.length).toFixed(2))
+        components.length > 0
+          ? Number((components.reduce((a, b) => a + b, 0) / components.length).toFixed(1))
           : null;
 
-      const status = getStatusFromScore(compositeScore);
+      const status = getPerformanceStatus(compositeScore);
 
       return {
-        id: tId,
-        teacherName: tName,
-        teamLeader: 'Putri Nadia Ayu R',
-        role: tutor.role,
-        classesConducted,
+        tutorName,
+        totalSchedules: tSchedules.length,
+        conductedCount,
         totalAttended,
         totalExpected,
         attendancePct,
-        disciplineLabel,
-        hasDisciplineIssue,
         fbPct,
-        doneOverdueCount,
+        fbCount: tFb.length,
         meetPct,
+        meetCount: tMeet.length,
         disciplinePct,
-        qualityScore,
-        qcCount: myQcs.length,
-        complaint: '-',
+        qcAvg,
+        qcCount: tQc.length,
         compositeScore,
         status,
       };
     });
-
-    return rows.sort((a, b) => {
-      const scoreA = a.compositeScore ?? -1;
-      const scoreB = b.compositeScore ?? -1;
-      if (scoreB !== scoreA) return scoreB - scoreA;
-      const attA = a.attendancePct ?? -1;
-      const attB = b.attendancePct ?? -1;
-      return attB - attA;
-    });
   }, [
-    tutors,
+    users,
     schedules,
     feedbackAssignments,
     meetings,
@@ -388,63 +401,86 @@ export default function TutorMetric() {
     qcRecords,
     selectedMonth,
     selectedYear,
-    qcPeriodMode,
   ]);
 
-  const filteredRows = useMemo(() => {
-    return metricRows.filter((row) => {
-      if (statusFilter !== 'all' && row.status !== statusFilter) return false;
-      if (search.trim()) {
-        const q = search.toLowerCase();
-        if (!row.teacherName.toLowerCase().includes(q)) return false;
-      }
+  const filteredAndSortedTutors = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = tutorMetricsList.filter((item) => {
+      // Sembunyikan tutor yang tidak punya aktivitas sama sekali pada filter aktif
+      const hasActivity =
+        item.totalSchedules > 0 || item.fbCount > 0 || item.meetCount > 0 || item.qcCount > 0;
+      if (!hasActivity) return false;
+
+      if (selectedStatus !== 'all' && item.status.label !== selectedStatus) return false;
+      if (q && !item.tutorName.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [metricRows, statusFilter, search]);
 
-  const summary = useMemo(() => {
-    const validDisc = filteredRows.filter((r) => r.disciplinePct !== null);
-    const validQc = filteredRows.filter((r) => r.qualityScore !== null);
+    return list.sort((a, b) => {
+      if (sortBy === 'name_asc') return a.tutorName.localeCompare(b.tutorName);
+      if (sortBy === 'attendance_desc') return (b.attendancePct ?? -1) - (a.attendancePct ?? -1);
+      if (sortBy === 'discipline_desc') return (b.disciplinePct ?? -1) - (a.disciplinePct ?? -1);
+      if (sortBy === 'qc_desc') return (b.qcAvg ?? -1) - (a.qcAvg ?? -1);
+      if (sortBy === 'conducted_desc') return b.conductedCount - a.conductedCount;
+      return (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
+    });
+  }, [tutorMetricsList, search, selectedStatus, sortBy]);
 
-    const sumAttended = filteredRows.reduce((s, r) => s + (r.totalAttended || 0), 0);
-    const sumExpected = filteredRows.reduce((s, r) => s + (r.totalExpected || 0), 0);
+  const summaryKpis = useMemo(() => {
+    const activeTutors = filteredAndSortedTutors.length;
+    const totalConducted = filteredAndSortedTutors.reduce((s, t) => s + t.conductedCount, 0);
+
+    const totalAtt = filteredAndSortedTutors.reduce((s, t) => s + t.totalAttended, 0);
+    const totalExp = filteredAndSortedTutors.reduce((s, t) => s + t.totalExpected, 0);
     const avgAttendance =
-      sumExpected > 0 ? Number(((sumAttended / sumExpected) * 100).toFixed(1)) : null;
+      totalExp > 0 ? Number(((totalAtt / totalExp) * 100).toFixed(1)) : 0;
 
-    const avg = (arr, key) =>
-      arr.length > 0
-        ? Number((arr.reduce((s, r) => s + Number(r[key] || 0), 0) / arr.length).toFixed(1))
-        : null;
+    const discItems = filteredAndSortedTutors.filter((t) => t.disciplinePct !== null);
+    const avgDiscipline =
+      discItems.length > 0
+        ? Number(
+            (discItems.reduce((s, t) => s + t.disciplinePct, 0) / discItems.length).toFixed(1)
+          )
+        : 0;
+
+    const qcItems = filteredAndSortedTutors.filter((t) => t.qcAvg !== null);
+    const avgQc =
+      qcItems.length > 0
+        ? Number((qcItems.reduce((s, t) => s + t.qcAvg, 0) / qcItems.length).toFixed(1))
+        : 0;
 
     return {
-      totalTutors: filteredRows.length,
-      totalClasses: filteredRows.reduce((s, r) => s + r.classesConducted, 0),
+      activeTutors,
+      totalConducted,
       avgAttendance,
-      avgDiscipline: avg(validDisc, 'disciplinePct'),
-      avgQuality: avg(validQc, 'qualityScore'),
+      totalAtt,
+      totalExp,
+      avgDiscipline,
+      avgQc,
     };
-  }, [filteredRows]);
+  }, [filteredAndSortedTutors]);
 
   const handleExportExcel = async () => {
     try {
       const XLSX = await import('xlsx');
-      const exportData = filteredRows.map((r, idx) => ({
-        Rating: idx + 1,
-        'Teacher Name': r.teacherName,
-        'Team Leader': r.teamLeader,
-        'Attendance (%)': r.attendancePct !== null ? `${r.attendancePct.toFixed(2)}%` : '-',
-        'Student Ratio': `${r.totalAttended}/${r.totalExpected}`,
-        Discipline: r.disciplineLabel,
-        'Quality (QC)': r.qualityScore !== null ? r.qualityScore : '-',
-        Complaint: r.complaint,
-        Status: r.status,
-      }));
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exportData), 'Tutor Central');
-      XLSX.writeFile(wb, `Tutor_Central_${selectedMonth}_${selectedYear}.xlsx`);
-      toast.success('Tutor Metric report exported');
+      const rows = filteredAndSortedTutors.map((t) => ({
+        Tutor: t.tutorName,
+        Conducted: t.conductedCount,
+        'Attended / Expected': `${t.totalAttended}/${t.totalExpected}`,
+        'Attendance (%)': t.attendancePct ?? '-',
+        'Monthly Feedback (%)': t.fbPct ?? '-',
+        'Meeting Presence (%)': t.meetPct ?? '-',
+        'Discipline (%)': t.disciplinePct ?? '-',
+        'QC Avg': t.qcAvg ?? '-',
+        'Composite Score': t.compositeScore ?? '-',
+        Status: t.status.label,
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Tutor Metrics');
+      XLSX.writeFile(wb, `Tutor_Metrics_${selectedMonth}_${selectedYear}.xlsx`);
+      toast.success('Tutor Metrics report exported');
     } catch (err) {
-      toast.error('Export failed', { description: err.message });
+      toast.error('Failed to export Tutor Metrics', { description: err.message });
     }
   };
 
@@ -454,223 +490,239 @@ export default function TutorMetric() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground flex items-center gap-2.5">
-            <BarChart3 className="w-7 h-7 text-primary" />
+            <Activity className="w-7 h-7 text-primary" />
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Monthly tutor performance evaluation: Attendance Ratio, Discipline (75% Feedback + 25% Meeting), &amp; Last Month QC Quality.
+            Composite tutor performance across Student Attendance ratio, Discipline (75% Feedback + 25% Meeting), and QC Evaluation.
           </p>
         </div>
 
         <Button variant="outline" onClick={handleExportExcel} className="gap-2 self-start lg:self-auto">
-          <FileSpreadsheet className="w-4 h-4" /> Export Excel
+          <FileSpreadsheet className="w-4 h-4" /> Export Metrics Excel
         </Button>
       </div>
 
       {/* Filters */}
-      <div className="bg-card border border-border rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-        <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-          <SelectTrigger>
-            <SelectValue placeholder="Month" />
-          </SelectTrigger>
-          <SelectContent>
-            {MONTHS.map((m) => (
-              <SelectItem key={m.value} value={m.value}>
-                {m.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="bg-card border border-border rounded-2xl p-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+            <SelectTrigger>
+              <SelectValue placeholder="Month" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Months</SelectItem>
+              {MONTHS.map((m) => (
+                <SelectItem key={m.value} value={m.value}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
-        <Select value={selectedYear} onValueChange={setSelectedYear}>
-          <SelectTrigger>
-            <SelectValue placeholder="Year" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="2026">2026</SelectItem>
-            <SelectItem value="2025">2025</SelectItem>
-          </SelectContent>
-        </Select>
+          <Select value={selectedYear} onValueChange={setSelectedYear}>
+            <SelectTrigger>
+              <SelectValue placeholder="Year" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Years</SelectItem>
+              <SelectItem value="2026">2026</SelectItem>
+              <SelectItem value="2025">2025</SelectItem>
+            </SelectContent>
+          </Select>
 
-        <Select value={qcPeriodMode} onValueChange={setQcPeriodMode}>
-          <SelectTrigger>
-            <SelectValue placeholder="QC Reference" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="prev">QC: Last Month (Default SOP)</SelectItem>
-            <SelectItem value="current">QC: Current Selected Month</SelectItem>
-          </SelectContent>
-        </Select>
+          <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+            <SelectTrigger>
+              <SelectValue placeholder="All Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="High Performer">High Performer (&ge;90)</SelectItem>
+              <SelectItem value="Stable Performer">Stable Performer (80–89.99)</SelectItem>
+              <SelectItem value="Need Improvement">Need Improvement (70–79.99)</SelectItem>
+              <SelectItem value="Low Performance">Low Performance (&lt;70)</SelectItem>
+            </SelectContent>
+          </Select>
 
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger>
-            <SelectValue placeholder="Performance Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="High Performer">High Performer (90–100)</SelectItem>
-            <SelectItem value="Stable Performer">Stable Performer (80–89.99)</SelectItem>
-            <SelectItem value="Need Improvement">Need Improvement (70–79.99)</SelectItem>
-            <SelectItem value="Low Performance">Low Performance (&lt;70)</SelectItem>
-            <SelectItem value="No result">No result</SelectItem>
-          </SelectContent>
-        </Select>
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger>
+              <SelectValue placeholder="Sort By" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="composite_desc">Composite Score (High–Low)</SelectItem>
+              <SelectItem value="attendance_desc">Attendance % (High–Low)</SelectItem>
+              <SelectItem value="discipline_desc">Discipline % (High–Low)</SelectItem>
+              <SelectItem value="qc_desc">QC Quality (High–Low)</SelectItem>
+              <SelectItem value="conducted_desc">Conducted Lessons (High–Low)</SelectItem>
+              <SelectItem value="name_asc">Tutor Name (A–Z)</SelectItem>
+            </SelectContent>
+          </Select>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search teacher name..."
-            className="pl-9"
-          />
-        </div>
-      </div>
-
-      {/* Summary Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-            <Users className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-bold text-foreground">{summary.totalTutors}</div>
-            <div className="text-xs text-muted-foreground">Active Tutors</div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-            <CalendarCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-bold text-foreground">{summary.totalClasses}</div>
-            <div className="text-xs text-muted-foreground">Total Conducted</div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
-            <Percent className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-bold text-foreground">
-              {summary.avgAttendance !== null ? `${summary.avgAttendance}%` : '-'}
-            </div>
-            <div className="text-xs text-muted-foreground">Avg Attendance</div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-bold text-foreground">
-              {summary.avgDiscipline !== null ? `${summary.avgDiscipline}%` : '-'}
-            </div>
-            <div className="text-xs text-muted-foreground">Avg Discipline</div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-            <Award className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-bold text-foreground">
-              {summary.avgQuality !== null ? summary.avgQuality : '-'}
-            </div>
-            <div className="text-xs text-muted-foreground">Avg QC Quality</div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search tutor name..."
+              className="pl-9"
+            />
           </div>
         </div>
       </div>
 
-      {/* Main Table */}
-      <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        {loading ? (
-          <div className="flex justify-center py-16">
-            <Loader2 className="w-7 h-7 animate-spin text-primary" />
+      {/* 5 Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
+            <Users className="w-5 h-5 text-white" />
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-secondary/50 border-b border-border text-xs text-muted-foreground uppercase">
+          <div>
+            <div className="text-2xl font-bold text-foreground">{summaryKpis.activeTutors}</div>
+            <div className="text-xs font-semibold text-foreground">Active Tutors</div>
+            <div className="text-[11px] text-muted-foreground">With activity in period</div>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0">
+            <CalendarCheck className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-foreground">{summaryKpis.totalConducted}</div>
+            <div className="text-xs font-semibold text-foreground">Total Conducted</div>
+            <div className="text-[11px] text-muted-foreground">Valid non-test lessons</div>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-teal-600 flex items-center justify-center flex-shrink-0">
+            <Percent className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-foreground">{summaryKpis.avgAttendance}%</div>
+            <div className="text-xs font-semibold text-foreground">Avg Attendance</div>
+            <div className="text-[11px] text-muted-foreground">
+              {summaryKpis.totalAtt}/{summaryKpis.totalExp} kids attended
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-violet-600 flex items-center justify-center flex-shrink-0">
+            <ShieldCheck className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-foreground">{summaryKpis.avgDiscipline}%</div>
+            <div className="text-xs font-semibold text-foreground">Avg Discipline</div>
+            <div className="text-[11px] text-muted-foreground">75% Feedback + 25% Meeting</div>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-amber-500 flex items-center justify-center flex-shrink-0">
+            <Star className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-foreground">{summaryKpis.avgQc}</div>
+            <div className="text-xs font-semibold text-foreground">Avg QC Quality</div>
+            <div className="text-[11px] text-muted-foreground">Mean evaluation score</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div className="flex justify-center py-16">
+          <Loader2 className="w-7 h-7 animate-spin text-primary" />
+        </div>
+      ) : (
+        <div className="bg-card border border-border rounded-2xl p-5 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="border-b border-border text-muted-foreground">
+              <tr className="text-left">
+                <th className="py-3 font-semibold">#</th>
+                <th className="py-3 font-semibold">Tutor Name</th>
+                <th className="py-3 font-semibold text-center">Conducted</th>
+                <th className="py-3 font-semibold text-center">Attendance Ratio</th>
+                <th className="py-3 font-semibold text-center">Discipline (75/25)</th>
+                <th className="py-3 font-semibold text-center">Quality (QC)</th>
+                <th className="py-3 font-semibold text-center">
+                  <span className="inline-flex items-center gap-1">
+                    Composite <ArrowUpDown className="w-3 h-3" />
+                  </span>
+                </th>
+                <th className="py-3 font-semibold text-right">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filteredAndSortedTutors.length === 0 ? (
                 <tr>
-                  <th className="px-4 py-3.5 text-left font-semibold">Rating</th>
-                  <th className="px-4 py-3.5 text-left font-semibold">Teacher Name</th>
-                  <th className="px-4 py-3.5 text-left font-semibold">Team Leader</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Attendance</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Discipline</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Quality (QC)</th>
-                  <th className="px-4 py-3.5 text-center font-semibold">Complaint</th>
-                  <th className="px-4 py-3.5 text-right font-semibold">Status</th>
+                  <td colSpan={8} className="py-10 text-center text-muted-foreground">
+                    No tutor metric records found for the selected period.
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {filteredRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="py-12 text-center text-muted-foreground text-sm">
-                      No tutor metrics found for the selected period.
+              ) : (
+                filteredAndSortedTutors.map((t, index) => (
+                  <tr key={t.tutorName} className="hover:bg-secondary/30 transition-colors">
+                    <td className="py-3 text-muted-foreground font-medium">{index + 1}</td>
+                    <td className="py-3 font-semibold text-foreground">{t.tutorName}</td>
+                    <td className="py-3 text-center">
+                      <span className="font-semibold text-indigo-600">{t.conductedCount}</span>
+                      <span className="text-muted-foreground">/{t.totalSchedules}</span>
+                    </td>
+                    <td className="py-3 text-center">
+                      {t.attendancePct !== null ? (
+                        <div>
+                          <div className="font-bold text-teal-600">{t.attendancePct}%</div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {t.totalAttended}/{t.totalExpected} kids
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    <td className="py-3 text-center">
+                      {t.disciplinePct !== null ? (
+                        <div>
+                          <div className="font-bold text-violet-600">{t.disciplinePct}%</div>
+                          <div className="text-[10px] text-muted-foreground">
+                            FB: {t.fbPct ?? '-'}% · Mt: {t.meetPct ?? '-'}%
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    <td className="py-3 text-center">
+                      {t.qcAvg !== null ? (
+                        <div>
+                          <div className="font-bold text-amber-600">{t.qcAvg}</div>
+                          <div className="text-[10px] text-muted-foreground">{t.qcCount} QC</div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    <td className="py-3 text-center">
+                      <span className="text-sm font-bold text-foreground">
+                        {t.compositeScore !== null ? t.compositeScore : '-'}
+                      </span>
+                    </td>
+                    <td className="py-3 text-right">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${t.status.badgeClass}`}
+                      >
+                        {t.status.label}
+                      </span>
                     </td>
                   </tr>
-                ) : (
-                  filteredRows.map((row, idx) => (
-                    <tr key={row.id} className="hover:bg-secondary/30 transition-colors">
-                      <td className="px-4 py-3.5 text-xs font-semibold text-muted-foreground">
-                        {idx + 1}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="font-semibold text-foreground">{row.teacherName}</div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {row.classesConducted} conducted classes
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 text-muted-foreground text-xs">
-                        {row.teamLeader}
-                      </td>
-                      <td className="px-4 py-3.5 text-center">
-                        <div className="font-semibold text-teal-600">
-                          {row.attendancePct !== null ? `${row.attendancePct.toFixed(2)}%` : '-'}
-                        </div>
-                        {row.attendancePct !== null && (
-                          <div className="text-[11px] text-muted-foreground">
-                            ({row.totalAttended}/{row.totalExpected})
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5 text-center">
-                        <span
-                          className={`text-xs font-medium ${
-                            row.hasDisciplineIssue ? 'text-violet-600' : 'text-muted-foreground'
-                          }`}
-                        >
-                          {row.disciplineLabel}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5 text-center font-semibold text-amber-600">
-                        {row.qualityScore !== null ? row.qualityScore : '-'}
-                      </td>
-                      <td className="px-4 py-3.5 text-center text-muted-foreground">
-                        {row.complaint}
-                      </td>
-                      <td className="px-4 py-3.5 text-right">
-                        <span
-                          className={`inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full text-xs font-semibold border ${getPerformanceBadge(
-                            row.status
-                          )}`}
-                        >
-                          {row.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

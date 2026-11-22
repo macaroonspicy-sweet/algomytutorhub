@@ -65,7 +65,7 @@ const MONTHS = [
 const FEEDBACK_WEIGHT = 0.75;
 const MEETING_WEIGHT = 0.25;
 
-// Set ke true jika ingin QC Result Avg selalu membaca hasil QC bulan sebelumnya (SOP TutorMetric)
+// Set ke true jika ingin QC Result Avg selalu membaca hasil QC bulan sebelumnya
 const USE_PREV_MONTH_FOR_QC = false;
 
 const normalizeName = (name) =>
@@ -106,9 +106,19 @@ const isLessonFourMultiple = (assignment) => {
   return true;
 };
 
-const isAssignmentCompleted = (assignment) =>
-  assignment.is_done === true ||
-  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+const getFeedbackScore = (assignment) => {
+  const st = String(assignment.status || '').trim().toLowerCase();
+  if (st === 'done_overdue' || st === 'overdue_done' || st === 'late') return 75;
+  if (
+    assignment.is_done === true ||
+    st === 'completed' ||
+    st === 'done' ||
+    st === 'submitted'
+  ) {
+    return 100;
+  }
+  return 0;
+};
 
 const parseLeadingInt = (val) => {
   const cleaned = String(val ?? '').replace(/\u00a0/g, ' ').trim();
@@ -122,11 +132,19 @@ const parsePercentNumber = (val) => {
   return Number.isNaN(num) ? 0 : num;
 };
 
+// Jumlah siswa seharusnya:
+// - Ambil angka utama dari students_raw atau students_count jika > 0
+// - Jika terbaca 0 (misal "0(0)" karena siswa di-expelled) namun ada siswa hadir (attended >= 1), anggap minimal attended (1)
 const parseExpectedStudentsCount = (r) => {
   const rawCount = parseLeadingInt(r.students_raw);
   if (rawCount > 0) return rawCount;
+
   const direct = Number(r.students_count);
   if (!Number.isNaN(direct) && direct > 0) return direct;
+
+  const attended = Number(r.students_attended) || 0;
+  if (attended >= 1) return attended;
+
   return 0;
 };
 
@@ -588,7 +606,6 @@ export default function TutorAdmin() {
           )
             .replace(/\u00a0/g, ' ')
             .trim();
-          const expectedStudents = parseLeadingInt(studentsRaw);
           const studentsAttended =
             Number(
               pickCell(row, [
@@ -600,6 +617,10 @@ export default function TutorAdmin() {
                 'present',
               ])
             ) || 0;
+
+          const parsedRawCount = parseLeadingInt(studentsRaw);
+          const expectedStudents =
+            parsedRawCount > 0 ? parsedRawCount : studentsAttended >= 1 ? studentsAttended : 0;
 
           const isConducted =
             (statusPct > 0 ||
@@ -888,8 +909,9 @@ export default function TutorAdmin() {
     });
 
     const fbTotal = filteredFb.length;
-    const fbDone = filteredFb.filter(isAssignmentCompleted).length;
-    const fbPct = fbTotal > 0 ? Number(((fbDone / fbTotal) * 100).toFixed(1)) : null;
+    const fbScoreSum = filteredFb.reduce((sum, a) => sum + getFeedbackScore(a), 0);
+    const fbDone = filteredFb.filter((a) => getFeedbackScore(a) > 0).length;
+    const fbPct = fbTotal > 0 ? Number((fbScoreSum / fbTotal).toFixed(1)) : null;
 
     const validMeetingMap = new Map();
     meetings.forEach((m) => {
@@ -935,7 +957,9 @@ export default function TutorAdmin() {
     const weeklyTrend = weeks.map((wk) => {
       const wFb = filteredFb.filter((a) => getWeekBucket(a.week_start_date) === wk);
       const wFbPct =
-        wFb.length > 0 ? (wFb.filter(isAssignmentCompleted).length / wFb.length) * 100 : null;
+        wFb.length > 0
+          ? wFb.reduce((s, a) => s + getFeedbackScore(a), 0) / wFb.length
+          : null;
 
       const wMeet = filteredMeetAtt.filter((att) => {
         const mObj = validMeetingMap.get(att.meeting_id);
@@ -1547,6 +1571,7 @@ export default function TutorAdmin() {
                 <thead className="border-b border-border text-muted-foreground">
                   <tr className="text-left">
                     <th className="py-2.5 font-semibold">Date</th>
+                    <th className="py-2.5 font-semibold">Time</th>
                     <th className="py-2.5 font-semibold">Group Code</th>
                     <th className="py-2.5 font-semibold">Course</th>
                     <th className="py-2.5 font-semibold">Tutor</th>
@@ -1558,6 +1583,7 @@ export default function TutorAdmin() {
                   {filteredSchedules.slice(0, 200).map((r) => (
                     <tr key={r.id}>
                       <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
+                      <td className="py-2.5 text-muted-foreground">{r.lesson_time || '-'}</td>
                       <td className="py-2.5 font-medium text-foreground">{r.group_title || r.group_code || '-'}</td>
                       <td className="py-2.5 text-muted-foreground">{getCourseLabel(r)}</td>
                       <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
