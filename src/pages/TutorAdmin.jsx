@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -141,7 +141,7 @@ const getCourseLabel = (r) => {
     r.course_title;
   if (direct && String(direct).trim()) return String(direct).trim();
 
-  // Fallback ekstraksi dari group_code bila kolom course kosong (misal: "MY 1-1 VP 020" -> "VP")
+  // Fallback ekstraksi dari group_code bila kolom course kosong (misal: "MY 1-1 VP 020" -> "VP")[cite: 7]
   const code = String(r.group_code || '').trim();
   const match = code.match(/\b(VP|PS|PP|GDJ|GDS|GD|RB|DL|BW|AI|WEB|PY)\b/i);
   if (match) return match[1].toUpperCase();
@@ -169,6 +169,29 @@ const getGroupFormat = (r) => {
     r.group_code ||
     '';
   return normalizeFormat(rawFormat);
+};
+
+const pickCell = (row, keys) => {
+  for (const k of keys) {
+    if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
+      return row[k];
+    }
+  }
+  return '';
+};
+
+const parseIsoDate = (rawVal) => {
+  if (!rawVal) return null;
+  if (rawVal instanceof Date && !Number.isNaN(rawVal.getTime())) {
+    return rawVal.toISOString().slice(0, 10);
+  }
+  const str = String(rawVal).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return null;
 };
 
 function MiniSparkline({ data, dataKey = 'value', stroke = '#6366f1' }) {
@@ -256,7 +279,10 @@ function HeroBentoCard({
 }
 
 export default function TutorAdmin() {
+  const fileInputRef = useRef(null);
+
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
   const [schedules, setSchedules] = useState([]);
   const [totalDbRows, setTotalDbRows] = useState(0);
   const [feedbackAssignments, setFeedbackAssignments] = useState([]);
@@ -321,6 +347,121 @@ export default function TutorAdmin() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleImportClick = () => {
+    if (importing) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImporting(true);
+    try {
+      const XLSX = await import('xlsx');
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+
+      if (!rows || rows.length === 0) {
+        toast.warning('No rows found in the imported file');
+        return;
+      }
+
+      const mappedRows = rows
+        .map((row) => {
+          const rawDate = pickCell(row, ['lesson_date', 'date', 'Lesson Date', 'Date']);
+          const isoDate = parseIsoDate(rawDate);
+          const dateParts = isoDate ? isoDate.split('-') : [];
+
+          const lessonYear =
+            Number(pickCell(row, ['lesson_year', 'year', 'Year'])) ||
+            (dateParts[0] ? Number(dateParts[0]) : Number(selectedYear) || 2026);
+          const lessonMonth =
+            Number(pickCell(row, ['lesson_month', 'month', 'Month'])) ||
+            (dateParts[1] ? Number(dateParts[1]) : Number(selectedMonth) || 11);
+
+          const groupCode = String(
+            pickCell(row, ['group_code', 'Group Code', 'group', 'Group', 'class_code', 'Class'])
+          ).trim();
+          const groupId = String(
+            pickCell(row, ['group_id', 'Group ID', 'id', 'ID'])
+          ).trim();
+          const courseName = String(
+            pickCell(row, ['course_name', 'course', 'Course', 'program', 'Program', 'subject'])
+          ).trim();
+          const lessonTeacher = String(
+            pickCell(row, ['lesson_teacher', 'teacher', 'Teacher', 'tutor', 'Tutor', 'tutor_name'])
+          ).trim();
+
+          const rawConducted = String(
+            pickCell(row, ['is_conducted', 'conducted', 'Conducted', 'status', 'Status'])
+          )
+            .trim()
+            .toLowerCase();
+          const isConducted =
+            rawConducted === 'true' ||
+            rawConducted === '1' ||
+            rawConducted === 'yes' ||
+            rawConducted === 'conducted' ||
+            rawConducted === 'completed';
+
+          const studentsAttended =
+            Number(pickCell(row, ['students_attended', 'attended', 'Attended', 'present'])) || 0;
+          const studentsCount =
+            Number(pickCell(row, ['students_count', 'enrolled', 'Enrolled', 'total_students'])) || 0;
+          const lessonNumberRaw = pickCell(row, ['lesson_number', 'lesson', 'Lesson', 'lesson_no']);
+          const lessonNumber =
+            lessonNumberRaw !== '' && !Number.isNaN(Number(lessonNumberRaw))
+              ? Number(lessonNumberRaw)
+              : null;
+
+          const isTestGroup =
+            String(groupCode).toLowerCase().includes('test') ||
+            String(pickCell(row, ['is_test_group', 'test_group'])).toLowerCase() === 'true';
+
+          if (!groupCode && !groupId && !lessonTeacher && !isoDate) return null;
+
+          return {
+            lesson_date: isoDate,
+            lesson_year: lessonYear,
+            lesson_month: lessonMonth,
+            group_code: groupCode || null,
+            group_id: groupId || null,
+            course_name: courseName || null,
+            lesson_teacher: lessonTeacher || null,
+            is_conducted: isConducted,
+            students_attended: studentsAttended,
+            students_count: studentsCount > 0 ? studentsCount : null,
+            lesson_number: lessonNumber,
+            is_test_group: isTestGroup,
+          };
+        })
+        .filter(Boolean);
+
+      if (mappedRows.length === 0) {
+        toast.warning('No valid schedule rows matched the expected columns');
+        return;
+      }
+
+      const chunkSize = 500;
+      for (let i = 0; i < mappedRows.length; i += chunkSize) {
+        const chunk = mappedRows.slice(i, i + chunkSize);
+        const { error } = await supabase.from('BoScheduleRecord').insert(chunk);
+        if (error) throw error;
+      }
+
+      toast.success(`Imported ${mappedRows.length} BO schedule rows successfully`);
+      await loadData();
+    } catch (err) {
+      toast.error('Failed to import CSV / Excel BO', { description: err.message });
+    } finally {
+      setImporting(false);
+      if (e.target) e.target.value = '';
+    }
+  };
 
   const courseOptions = useMemo(() => {
     const set = new Set();
@@ -709,6 +850,14 @@ export default function TutorAdmin() {
 
   return (
     <div className="space-y-6">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,.xlsx,.xls"
+        onChange={handleImportFile}
+        className="hidden"
+      />
+
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
@@ -725,8 +874,18 @@ export default function TutorAdmin() {
           <Button variant="outline" onClick={handleExportExcel} className="gap-2">
             <FileSpreadsheet className="w-4 h-4" /> Export Excel
           </Button>
-          <Button className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
-            <Upload className="w-4 h-4" /> Import CSV / Excel BO
+          <Button
+            type="button"
+            onClick={handleImportClick}
+            disabled={importing}
+            className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
+          >
+            {importing ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4" />
+            )}
+            {importing ? 'Importing...' : 'Import CSV / Excel BO'}
           </Button>
         </div>
       </div>
