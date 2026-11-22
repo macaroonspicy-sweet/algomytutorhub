@@ -149,9 +149,16 @@ const isLessonConducted = (r) => {
 
 // Rumus: (Attendance + Discipline + QC) / 3
 const calcCompositeDividedByThree = (attendancePct, disciplinePct, qcAvg) => {
-  const a = attendancePct !== null && attendancePct !== undefined && !Number.isNaN(attendancePct) ? Number(attendancePct) : 0;
-  const d = disciplinePct !== null && disciplinePct !== undefined && !Number.isNaN(disciplinePct) ? Number(disciplinePct) : 0;
-  const q = qcAvg !== null && qcAvg !== undefined && !Number.isNaN(qcAvg) ? Number(qcAvg) : 0;
+  const a =
+    attendancePct !== null && attendancePct !== undefined && !Number.isNaN(attendancePct)
+      ? Number(attendancePct)
+      : 0;
+  const d =
+    disciplinePct !== null && disciplinePct !== undefined && !Number.isNaN(disciplinePct)
+      ? Number(disciplinePct)
+      : 0;
+  const q =
+    qcAvg !== null && qcAvg !== undefined && !Number.isNaN(qcAvg) ? Number(qcAvg) : 0;
   return Number(((a + d + q) / 3).toFixed(2));
 };
 
@@ -162,7 +169,10 @@ const getQcTimestamp = (q) => {
 };
 
 const isQcEvaluated = (q) => {
-  const hasScore = q.evaluation_score !== null && q.evaluation_score !== undefined && String(q.evaluation_score).trim() !== '';
+  const hasScore =
+    q.evaluation_score !== null &&
+    q.evaluation_score !== undefined &&
+    String(q.evaluation_score).trim() !== '';
   if (!hasScore) return false;
   const st = String(q.status || q.evaluation_status || '').trim().toLowerCase();
   if (st === 'pending' || st === 'draft' || st === 'unassigned') return false;
@@ -213,7 +223,6 @@ export default function TutorMetric() {
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedStatus, setSelectedStatus] = useState('all');
-  // 'prev_month' = QC Last Month sesuai SOP | 'latest_evaluated' = QC terbaru di bulan tsb yang sudah dievaluasi | 'all_evaluated' = rata-rata QC bulan tsb
   const [qcMode, setQcMode] = useState('latest_evaluated');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('composite_desc');
@@ -353,7 +362,6 @@ export default function TutorMetric() {
     });
     const periodMeetAtts = meetingAttendances.filter((att) => validMeetingIds.has(att.meeting_id));
 
-    // Filter QC sesuai pilihan qcMode
     let qcTargetMonth = selectedMonth === 'all' ? null : Number(selectedMonth);
     let qcTargetYear = selectedYear === 'all' ? null : Number(selectedYear);
 
@@ -436,7 +444,6 @@ export default function TutorMetric() {
         disciplinePct = meetPct;
       }
 
-      // QC: jika latest_evaluated, ambil evaluasi terbaru yang sudah dievaluasi; selain itu rata-rata evaluasi
       const tQcAll = evaluatedQcs.filter((q) => isSameTutor(q.tutor_name, tutorName));
       const tQcSelected =
         qcMode === 'latest_evaluated' && tQcAll.length > 0 ? [tQcAll[0]] : tQcAll;
@@ -456,7 +463,6 @@ export default function TutorMetric() {
       );
       const complaintCount = tComplaints.length;
 
-      // Composite = (Attendance + Discipline + QC) / 3
       const compositeScore = calcCompositeDividedByThree(attendancePct, disciplinePct, qcAvg);
       const status = getPerformanceStatus(compositeScore);
 
@@ -526,7 +532,6 @@ export default function TutorMetric() {
       if (sortBy === 'qc_desc') return (b.qcAvg ?? -1) - (a.qcAvg ?? -1);
       if (sortBy === 'complaint_desc') return b.complaintCount - a.complaintCount;
       if (sortBy === 'conducted_desc') return b.conductedCount - a.conductedCount;
-      // Default: tertinggi ke terendah berdasarkan (Attendance + Discipline + QC) / 3
       const diff = (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
       if (diff !== 0) return diff;
       return (b.attendancePct ?? -1) - (a.attendancePct ?? -1);
@@ -573,8 +578,8 @@ export default function TutorMetric() {
       const wb = XLSX.utils.book_new();
       const rows = filteredAndSortedTutors.map((t) => ({
         Tutor: t.tutorName,
-        Conducted: t.conductedCount,
-        'Total Schedules': t.totalSchedules,
+        'Conducted Lessons': t.conductedCount,
+        'Kids Attended': `${t.totalAttended}/${t.totalExpected}`,
         'Attendance (%)': t.attendancePct ?? '-',
         'Monthly Feedback (%)': t.fbPct ?? '-',
         'Meeting Presence (%)': t.meetPct ?? '-',
@@ -794,14 +799,7 @@ export default function TutorMetric() {
                 filteredAndSortedTutors.map((t, index) => (
                   <tr key={t.tutorName} className="hover:bg-secondary/30 transition-colors">
                     <td className="py-3 text-muted-foreground font-medium">{index + 1}</td>
-                    <td className="py-3 font-semibold text-foreground">
-                      <div>{t.tutorName}</div>
-                      {t.aliases.length > 1 && (
-                        <div className="text-[10px] text-muted-foreground font-normal">
-                          Merged: {t.aliases.filter((a) => a !== t.tutorName).join(', ')}
-                        </div>
-                      )}
-                    </td>
+                    <td className="py-3 font-semibold text-foreground">{t.tutorName}</td>
 
                     <td className="py-3 text-center">
                       <button
@@ -883,7 +881,7 @@ export default function TutorMetric() {
               {detailModal?.type === 'status' && <Award className="w-5 h-5 text-primary" />}
               <span>
                 {activeTutor?.tutorName} —{' '}
-                {detailModal?.type === 'attendance' && 'Attendance & Conducted Detail'}
+                {detailModal?.type === 'attendance' && 'Attendance Detail'}
                 {detailModal?.type === 'discipline' && 'Discipline Breakdown'}
                 {detailModal?.type === 'qc' && 'QC Evaluation Detail'}
                 {detailModal?.type === 'complaint' && 'Complaint Detail'}
@@ -894,28 +892,28 @@ export default function TutorMetric() {
 
           {activeTutor && detailModal?.type === 'attendance' && (
             <div className="space-y-3 text-xs pt-1">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-2.5">
                 <div className="p-3.5 rounded-xl bg-teal-50 border border-teal-200">
                   <div className="text-teal-700 font-medium">Attendance Ratio</div>
                   <div className="text-2xl font-bold text-teal-900 mt-0.5">
                     {activeTutor.attendancePct !== null ? `${activeTutor.attendancePct}%` : '-'}
                   </div>
                 </div>
+
                 <div className="p-3.5 rounded-xl bg-indigo-50 border border-indigo-200">
                   <div className="text-indigo-700 font-medium">Conducted Lessons</div>
                   <div className="text-2xl font-bold text-indigo-900 mt-0.5">
-                    {activeTutor.conductedCount}{' '}
-                    <span className="text-sm font-medium text-indigo-700">
-                      / {activeTutor.totalSchedules} schedules
-                    </span>
+                    {activeTutor.conductedCount}
                   </div>
                 </div>
-              </div>
-              <div className="p-3.5 rounded-xl bg-secondary border border-border flex items-center justify-between">
-                <span className="text-muted-foreground font-medium">Kids Attended Ratio</span>
-                <span className="font-bold text-foreground">
-                  {activeTutor.totalAttended} / {activeTutor.totalExpected} kids
-                </span>
+
+                <div className="p-3.5 rounded-xl bg-secondary border border-border">
+                  <div className="text-muted-foreground font-medium">Total Students</div>
+                  <div className="text-2xl font-bold text-foreground mt-0.5">
+                    {activeTutor.totalAttended}/{activeTutor.totalExpected}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">kids attended</div>
+                </div>
               </div>
             </div>
           )}
@@ -1041,7 +1039,9 @@ export default function TutorMetric() {
             <div className="space-y-3 text-xs pt-1">
               <div className="p-3.5 rounded-xl bg-secondary border border-border flex items-center justify-between">
                 <div>
-                  <div className="text-muted-foreground font-medium">Composite ((Attendance + Discipline + QC) / 3)</div>
+                  <div className="text-muted-foreground font-medium">
+                    Composite ((Attendance + Discipline + QC) / 3)
+                  </div>
                   <div className="text-2xl font-bold text-foreground mt-0.5">
                     {activeTutor.compositeScore !== null ? activeTutor.compositeScore : '-'}
                   </div>
@@ -1076,7 +1076,9 @@ export default function TutorMetric() {
 
               <div className="rounded-xl bg-secondary/30 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
                 <div className="font-semibold text-foreground">Status Thresholds:</div>
-                <div>High Performer: &ge; 90 · Stable Performer: 80–89.99 · Need Improvement: 70–79.99 · Low Performance: &lt; 70</div>
+                <div>
+                  High Performer: &ge; 90 · Stable Performer: 80–89.99 · Need Improvement: 70–79.99 · Low Performance: &lt; 70
+                </div>
               </div>
             </div>
           )}
