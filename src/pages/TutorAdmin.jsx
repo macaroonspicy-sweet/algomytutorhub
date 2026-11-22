@@ -1,11 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import { useAppAuth } from '@/lib/AppAuthContext';
-import {
-  parseBoScheduleFile,
-  getNextMondayISO,
-  getWeekBoundsFromDate,
-} from '@/lib/boCsvParser';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -21,22 +15,33 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import Pagination from '@/components/ui/pagination';
 import {
-  Upload,
-  FileSpreadsheet,
-  Loader2,
-  Users,
-  BookOpen,
+  BarChart2,
   CalendarCheck,
-  Sparkles,
   Percent,
+  ShieldCheck,
+  Star,
+  BookOpen,
+  Users,
+  Sparkles,
   Bell,
   Search,
-  CheckCircle2,
+  FileSpreadsheet,
+  Upload,
+  Loader2,
   ArrowUpRight,
-  BarChart3,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from 'recharts';
 import { toast } from 'sonner';
 
 const MONTHS = [
@@ -54,460 +59,176 @@ const MONTHS = [
   { value: '12', label: 'December' },
 ];
 
-const WEEKS = [
-  'Week 1 (1–7)',
-  'Week 2 (8–14)',
-  'Week 3 (15–21)',
-  'Week 4 (22–End)',
-];
+const FEEDBACK_WEIGHT = 0.75;
+const MEETING_WEIGHT = 0.25;
 
-const ITEMS_PER_PAGE = 15;
+// Set ke true jika ingin QC Result Avg selalu membaca hasil QC bulan sebelumnya (SOP TutorMetric)
+const USE_PREV_MONTH_FOR_QC = false;
 
-const makeId = () =>
-  typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const normalizeName = (name) =>
+  (name || '')
+    .toLowerCase()
+    .replace(/\b(binti|bin|md|mohd|muhammad)\b/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
 
-function MiniSparkline({ points = [], strokeClass = 'stroke-primary', fillClass = 'fill-primary/10' }) {
-  const safePoints = points.length >= 2 ? points : [0, 0, 0, 0];
-  const max = Math.max(...safePoints, 1);
-  const min = Math.min(...safePoints, 0);
-  const range = Math.max(max - min, 1);
-  const width = 128;
-  const height = 42;
-  const padX = 6;
-  const padY = 6;
+const isSameTutor = (a, b) => {
+  if (!a || !b) return false;
+  const cleanA = a.toLowerCase().trim();
+  const cleanB = b.toLowerCase().trim();
+  if (cleanA === cleanB) return true;
+  if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
+  const normA = normalizeName(a);
+  const normB = normalizeName(b);
+  return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
+};
 
-  const coords = safePoints.map((val, idx) => {
-    const x = padX + (idx / (safePoints.length - 1)) * (width - padX * 2);
-    const y = height - padY - ((val - min) / range) * (height - padY * 2);
-    return { x, y };
-  });
+const normalizeAttendanceStatus = (status) => {
+  const val = String(status || '').trim().toLowerCase();
+  if (val === 'present') return 'Present';
+  if (val === 'excused') return 'Excused';
+  return 'Absent';
+};
 
-  const linePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
-  const areaPath = `${linePath} L ${coords[coords.length - 1].x.toFixed(1)} ${height} L ${coords[0].x.toFixed(1)} ${height} Z`;
+const isLessonFourMultiple = (assignment) => {
+  if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
+    const num = Number(assignment.lesson_number);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+  }
+  return true;
+};
 
+const isAssignmentCompleted = (assignment) =>
+  assignment.is_done === true ||
+  ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
+
+const parseEnrolledCount = (r) => {
+  const direct = Number(r.students_count);
+  if (!Number.isNaN(direct) && direct > 0) return direct;
+  const rawMatch = String(r.students_raw || '').match(/^(\d+)/);
+  if (rawMatch) {
+    const parsed = Number(rawMatch[1]);
+    if (parsed > 0) return parsed;
+  }
+  const attended = Number(r.students_attended) || 0;
+  const pct = Number(r.attendance_pct) || 0;
+  if (attended > 0 && pct > 0) return Math.round((attended * 100) / pct);
+  return attended;
+};
+
+const getWeekBucket = (dateStr) => {
+  if (!dateStr) return 'W1';
+  const day = Number(String(dateStr).split('-')[2] || 1);
+  if (day <= 7) return 'W1';
+  if (day <= 14) return 'W2';
+  if (day <= 21) return 'W3';
+  return 'W4';
+};
+
+const normalizeFormat = (raw) => {
+  const f = String(raw || '').toLowerCase();
+  if (f.includes('intens')) return 'Intensive';
+  if (f.includes('indiv') || f.includes('1-1') || f.includes('private')) return 'Individual';
+  return 'Group';
+};
+
+function MiniSparkline({ data, dataKey = 'value', stroke = '#6366f1' }) {
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-32 h-11 overflow-visible flex-shrink-0">
-      <path d={areaPath} className={fillClass} />
-      <path
-        d={linePath}
-        fill="none"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className={strokeClass}
-      />
-      {coords.map((c, idx) => (
-        <circle
-          key={idx}
-          cx={c.x}
-          cy={c.y}
-          r="2.5"
-          className={`${strokeClass} fill-card`}
-          strokeWidth="2"
-        />
-      ))}
-    </svg>
+    <div className="w-24 h-11 flex-shrink-0">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data}>
+          <Line
+            type="monotone"
+            dataKey={dataKey}
+            stroke={stroke}
+            strokeWidth={2.2}
+            dot={{ r: 2.5, fill: '#fff', stroke, strokeWidth: 2 }}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
 function HeroBentoCard({
-  label,
-  value,
-  sub,
   icon: Icon,
-  tone,
-  barTone,
-  strokeClass,
-  fillClass,
-  sparklineData,
-  progressPct,
-  onClick,
+  iconBg,
+  value,
+  title,
+  subtitle,
+  sparkData,
+  sparkStroke,
+  progressPct = 0,
+  barColor,
+  badges = [],
+  onViewChart,
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group text-left bg-card border border-border hover:border-primary/50 hover:shadow-sm rounded-2xl p-5 transition-all flex flex-col justify-between gap-4 cursor-pointer"
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${tone}`}>
-            <Icon className="w-6 h-6 text-white" />
+    <div className="bg-card border border-border rounded-2xl p-5 flex flex-col justify-between gap-4 shadow-sm hover:shadow-md transition-shadow">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
+            <Icon className="w-5 h-5 text-white" />
           </div>
           <div className="min-w-0">
-            <div className="text-3xl font-bold text-foreground leading-tight tracking-tight">{value}</div>
-            <div className="text-sm font-semibold text-foreground/85 mt-0.5">{label}</div>
-            {sub && <div className="text-xs text-muted-foreground mt-0.5">{sub}</div>}
+            <div className="text-2xl xl:text-[26px] font-bold text-foreground leading-tight tracking-tight">
+              {value}
+            </div>
+            <div className="text-xs font-semibold text-foreground mt-0.5 truncate">{title}</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5 truncate">{subtitle}</div>
           </div>
         </div>
-
-        <div className="hidden sm:flex flex-col items-end">
-          <MiniSparkline points={sparklineData} strokeClass={strokeClass} fillClass={fillClass} />
-        </div>
+        <MiniSparkline data={sparkData} stroke={sparkStroke} />
       </div>
 
-      <div className="flex items-center justify-between gap-4 pt-1">
-        <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${barTone}`}
-            style={{ width: `${Math.min(100, Math.max(0, progressPct || 0))}%` }}
-          />
-        </div>
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground group-hover:text-primary bg-secondary/70 group-hover:bg-primary/10 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap">
-          View Chart <ArrowUpRight className="w-3.5 h-3.5" />
-        </span>
-      </div>
-    </button>
-  );
-}
-
-function SecondaryBentoCard({ label, value, sub, icon: Icon, tone, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group text-left bg-card border border-border hover:border-primary/50 hover:shadow-sm rounded-2xl p-4 transition-all flex items-start justify-between gap-3 cursor-pointer"
-    >
-      <div className="flex items-center gap-3.5 min-w-0">
-        <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${tone}`}>
-          <Icon className="w-5 h-5 text-white" />
-        </div>
-        <div className="min-w-0">
-          <div className="text-2xl font-bold text-foreground leading-tight">{value}</div>
-          <div className="text-xs font-semibold text-foreground/85 mt-0.5">{label}</div>
-          {sub && <div className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{sub}</div>}
-        </div>
-      </div>
-      <ArrowUpRight className="w-4 h-4 text-muted-foreground/60 group-hover:text-primary flex-shrink-0 transition-colors mt-0.5" />
-    </button>
-  );
-}
-
-function DynamicChartModal({
-  metricKey,
-  onClose,
-  filteredRecords,
-  conductedRecords,
-  groupClasses,
-  lesson1Records,
-  weeklySummary,
-  courseSummary,
-  avgAttendance,
-  totalKids,
-  multiple4Count,
-  filterBadgeText,
-}) {
-  const [viewMode, setViewMode] = useState('weekly');
-
-  useEffect(() => {
-    if (!metricKey) return;
-    if (metricKey === 'kids' || metricKey === 'lesson1') {
-      setViewMode('course');
-    } else if (metricKey === 'classes') {
-      setViewMode('format');
-    } else {
-      setViewMode('weekly');
-    }
-  }, [metricKey]);
-
-  const metricMeta = {
-    conducted: {
-      title: 'Lessons Conducted Analytics',
-      headline: `${conductedRecords.length} Conducted`,
-      subtitle: `Out of ${filteredRecords.length} total scheduled lessons`,
-      barColor: 'bg-primary',
-      unit: 'lessons',
-    },
-    attendance: {
-      title: 'Average Attendance Trend',
-      headline: `${avgAttendance}% Avg Attendance`,
-      subtitle: `Across ${conductedRecords.length} valid conducted classes`,
-      barColor: 'bg-chart-2',
-      unit: '%',
-    },
-    classes: {
-      title: 'Active Classes Breakdown',
-      headline: `${groupClasses.length} Active Classes`,
-      subtitle: 'Unique classes across Group, Individual & Intensive formats',
-      barColor: 'bg-chart-3',
-      unit: 'classes',
-    },
-    kids: {
-      title: 'Total Kids Distribution',
-      headline: `${totalKids} Total Kids`,
-      subtitle: 'Accumulated students across active classes',
-      barColor: 'bg-accent',
-      unit: 'kids',
-    },
-    lesson1: {
-      title: 'Lesson 1 New Classes Overview',
-      headline: `${lesson1Records.length} Lesson 1 Schedules`,
-      subtitle: 'First-session classes in the selected filter',
-      barColor: 'bg-chart-4',
-      unit: 'classes',
-    },
-    multiple4: {
-      title: 'Every 4th Lesson (Weekly Report Milestones)',
-      headline: `${multiple4Count} Milestone Lessons`,
-      subtitle: 'Lesson 4, 8, 12, 16... eligible for Weekly Report',
-      barColor: 'bg-chart-5',
-      unit: 'lessons',
-    },
-  };
-
-  const currentMeta = metricMeta[metricKey] || metricMeta.conducted;
-
-  const chartSeries = useMemo(() => {
-    if (!metricKey) return [];
-
-    if (viewMode === 'weekly') {
-      return weeklySummary.map((w) => {
-        const weekRows = filteredRecords.filter((r) => r.week_label === w.week);
-        let val = 0;
-        let detail = '';
-
-        if (metricKey === 'conducted') {
-          val = w.conducted;
-          detail = `${w.conducted} / ${w.scheduled} scheduled`;
-        } else if (metricKey === 'attendance') {
-          val = w.avgAtt;
-          detail = `${w.totalAttended} students attended`;
-        } else if (metricKey === 'classes') {
-          const uniq = new Set(weekRows.map((r) => r.group_id || r.group_title).filter(Boolean));
-          val = uniq.size;
-          detail = `${w.groupCount} Group · ${w.indivCount} Indiv · ${w.intensCount} Intensive`;
-        } else if (metricKey === 'kids') {
-          val = w.totalAttended;
-          detail = `Attended across ${w.conducted} conducted lessons`;
-        } else if (metricKey === 'lesson1') {
-          val = weekRows.filter((r) => !r.is_test_group && r.lesson_number === 1).length;
-          detail = 'New Lesson 1 sessions';
-        } else if (metricKey === 'multiple4') {
-          val = weekRows.filter(
-            (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
-          ).length;
-          detail = '4th-lesson report triggers';
-        }
-
-        return {
-          label: w.week.replace(' (', '\n('),
-          shortLabel: w.week.split(' ')[0] + ' ' + w.week.split(' ')[1],
-          value: val,
-          detail,
-        };
-      });
-    }
-
-    if (viewMode === 'course') {
-      return courseSummary.slice(0, 8).map((c) => {
-        const courseRows = filteredRecords.filter((r) => (r.course || 'Other') === c.course);
-        const condRows = courseRows.filter((r) => r.is_conducted);
-        let val = 0;
-        let detail = '';
-
-        if (metricKey === 'conducted') {
-          val = c.conducted_lessons;
-          detail = `${c.class_count} active classes`;
-        } else if (metricKey === 'attendance') {
-          val = condRows.length
-            ? Math.round(condRows.reduce((s, r) => s + (r.attendance_pct || 0), 0) / condRows.length)
-            : 0;
-          detail = `${condRows.length} conducted lessons`;
-        } else if (metricKey === 'classes') {
-          val = c.class_count;
-          detail = `${c.kids_count} total kids`;
-        } else if (metricKey === 'kids') {
-          val = c.kids_count;
-          detail = `${c.class_count} classes · ${c.conducted_lessons} conducted`;
-        } else if (metricKey === 'lesson1') {
-          val = courseRows.filter((r) => !r.is_test_group && r.lesson_number === 1).length;
-          detail = `${c.kids_count} total kids in course`;
-        } else if (metricKey === 'multiple4') {
-          val = courseRows.filter(
-            (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
-          ).length;
-          detail = `${c.class_count} active classes`;
-        }
-
-        return {
-          label: c.course,
-          shortLabel: c.course,
-          value: val,
-          detail,
-        };
-      });
-    }
-
-    // By Format (Group / Individual / Intensive)
-    const formats = ['Group', 'Individual', 'Intensive'];
-    return formats.map((fmt) => {
-      const fmtRows = filteredRecords.filter(
-        (r) => (r.group_type || '').toLowerCase() === fmt.toLowerCase()
-      );
-      const fmtCond = fmtRows.filter((r) => r.is_conducted);
-      const fmtClasses = groupClasses.filter(
-        (c) => (c.group_type || '').toLowerCase() === fmt.toLowerCase()
-      );
-      let val = 0;
-      let detail = '';
-
-      if (metricKey === 'conducted') {
-        val = fmtCond.length;
-        detail = `out of ${fmtRows.length} scheduled`;
-      } else if (metricKey === 'attendance') {
-        val = fmtCond.length
-          ? Math.round(fmtCond.reduce((s, r) => s + (r.attendance_pct || 0), 0) / fmtCond.length)
-          : 0;
-        detail = `${fmtCond.length} conducted lessons`;
-      } else if (metricKey === 'classes') {
-        val = fmtClasses.length;
-        detail = `${fmtClasses.reduce((s, c) => s + c.kids_count, 0)} kids enrolled`;
-      } else if (metricKey === 'kids') {
-        val = fmtClasses.reduce((s, c) => s + c.kids_count, 0);
-        detail = `${fmtClasses.length} active classes`;
-      } else if (metricKey === 'lesson1') {
-        val = fmtRows.filter((r) => !r.is_test_group && r.lesson_number === 1).length;
-        detail = `${fmtClasses.length} active classes`;
-      } else if (metricKey === 'multiple4') {
-        val = fmtRows.filter(
-          (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
-        ).length;
-        detail = `${fmtClasses.length} active classes`;
-      }
-
-      return {
-        label: fmt,
-        shortLabel: fmt,
-        value: val,
-        detail,
-      };
-    });
-  }, [metricKey, viewMode, weeklySummary, filteredRecords, courseSummary, groupClasses]);
-
-  const maxChartValue = useMemo(() => {
-    if (metricKey === 'attendance') return 100;
-    return Math.max(...chartSeries.map((d) => d.value), 1);
-  }, [chartSeries, metricKey]);
-
-  return (
-    <Dialog open={Boolean(metricKey)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="bg-card border-border max-w-2xl">
-        <DialogHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
-            <div>
-              <DialogTitle className="flex items-center gap-2 text-foreground text-lg">
-                <BarChart3 className="w-5 h-5 text-primary" />
-                {currentMeta.title}
-              </DialogTitle>
-              <p className="text-xs text-muted-foreground mt-1">
-                Active Filter: <span className="font-medium text-foreground">{filterBadgeText}</span>
-              </p>
-            </div>
-            <div className="text-right">
-              <div className="text-xl font-bold text-primary">{currentMeta.headline}</div>
-              <div className="text-[11px] text-muted-foreground">{currentMeta.subtitle}</div>
-            </div>
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-2 rounded-full bg-secondary overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+              style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
+            />
           </div>
-        </DialogHeader>
+          <button
+            type="button"
+            onClick={onViewChart}
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground hover:text-primary transition-colors whitespace-nowrap"
+          >
+            View Chart <ArrowUpRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
 
-        {/* View Mode Switcher */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
-          <div className="flex gap-1.5 bg-secondary/60 p-1 rounded-xl">
-            {[
-              { id: 'weekly', label: 'Weekly Trend' },
-              { id: 'course', label: 'Per Course' },
-              { id: 'format', label: 'By Format' },
-            ].map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                onClick={() => setViewMode(mode.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  viewMode === mode.id
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
+        {badges.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+            {badges.map((b, idx) => (
+              <span
+                key={idx}
+                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border whitespace-nowrap ${b.className}`}
               >
-                {mode.label}
-              </button>
+                {b.label}
+              </span>
             ))}
           </div>
-          <span className="text-[11px] text-muted-foreground">
-            Updates automatically with page filters
-          </span>
-        </div>
-
-        {/* Dynamic Visualization */}
-        {chartSeries.length === 0 ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">
-            No data available for the selected filter combination.
-          </div>
-        ) : viewMode === 'weekly' || viewMode === 'format' ? (
-          <div className="pt-2 space-y-4">
-            <div className="bg-secondary/30 border border-border rounded-2xl p-5">
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 items-end h-48 pt-6">
-                {chartSeries.map((item) => {
-                  const pct = Math.round((item.value / maxChartValue) * 100);
-                  return (
-                    <div key={item.label} className="flex flex-col items-center h-full justify-end gap-2">
-                      <span className="text-xs font-bold text-foreground">
-                        {item.value}
-                        {currentMeta.unit === '%' ? '%' : ''}
-                      </span>
-                      <div className="w-full max-w-[54px] h-32 bg-secondary rounded-xl flex items-end overflow-hidden p-1">
-                        <div
-                          className={`w-full rounded-lg transition-all duration-500 ${currentMeta.barColor}`}
-                          style={{ height: `${Math.max(pct, item.value > 0 ? 8 : 0)}%` }}
-                        />
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xs font-semibold text-foreground">{item.shortLabel}</div>
-                        <div className="text-[10px] text-muted-foreground line-clamp-1">{item.detail}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 pt-1">
-            {chartSeries.map((item) => {
-              const pct = Math.round((item.value / maxChartValue) * 100);
-              return (
-                <div key={item.label} className="bg-secondary/30 border border-border rounded-xl p-3 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-foreground truncate" title={item.label}>
-                      {item.label}
-                    </span>
-                    <span className="font-bold text-foreground whitespace-nowrap">
-                      {item.value} {currentMeta.unit !== '%' ? currentMeta.unit : '%'}
-                    </span>
-                  </div>
-                  <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${currentMeta.barColor}`}
-                      style={{ width: `${Math.max(pct, item.value > 0 ? 4 : 0)}%` }}
-                    />
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">{item.detail}</div>
-                </div>
-              );
-            })}
-          </div>
         )}
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }
 
 export default function TutorAdmin() {
-  const { currentUser } = useAppAuth();
-  const [records, setRecords] = useState([]);
-  const [tutors, setTutors] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [schedules, setSchedules] = useState([]);
+  const [totalDbRows, setTotalDbRows] = useState(0);
+  const [feedbackAssignments, setFeedbackAssignments] = useState([]);
+  const [meetings, setMeetings] = useState([]);
+  const [meetingAttendances, setMeetingAttendances] = useState([]);
+  const [qcRecords, setQcRecords] = useState([]);
 
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
@@ -515,47 +236,52 @@ export default function TutorAdmin() {
   const [selectedCourse, setSelectedCourse] = useState('all');
   const [selectedTutor, setSelectedTutor] = useState('all');
   const [search, setSearch] = useState('');
-  const [includeTest, setIncludeTest] = useState(false);
+  const [showTestGroups, setShowTestGroups] = useState(false);
 
-  const [activeTab, setActiveTab] = useState('overview');
-  const [page, setPage] = useState(1);
-  const [selectedChartMetric, setSelectedChartMetric] = useState(null);
-
-  const [importOpen, setImportOpen] = useState(false);
-  const [importFile, setImportFile] = useState(null);
-  const [cutoffDate, setCutoffDate] = useState(() => getNextMondayISO());
-  const [importing, setImporting] = useState(false);
+  const [activeTab, setActiveTab] = useState('summary'); // 'summary' | 'groups' | 'lesson1' | 'log'
+  const [chartModal, setChartModal] = useState(null); // 'conducted' | 'attendance' | 'discipline' | 'qc' | null
 
   const loadData = async () => {
     setLoading(true);
     try {
-      let allRecords = [];
+      let allSched = [];
       let from = 0;
       const step = 1000;
-
       while (true) {
-        const { data, error } = await supabase
+        const { data, error, count } = await supabase
           .from('BoScheduleRecord')
-          .select('*')
-          .order('lesson_date', { ascending: false })
-          .order('unique_key', { ascending: true })
+          .select('*', { count: 'exact' })
           .range(from, from + step - 1);
-
         if (error) throw error;
+        if (count !== null) setTotalDbRows(count);
         if (!data || data.length === 0) break;
-
-        allRecords = allRecords.concat(data);
+        allSched = allSched.concat(data);
         if (data.length < step) break;
         from += step;
       }
+      setSchedules(allSched);
 
-      const { data: userData } = await supabase
-        .from('CustomUser')
-        .select('id, full_name, role, is_active')
-        .in('role', ['Tutor', 'Team Leader']);
+      const [
+        { data: fbData, error: fbErr },
+        { data: meetData, error: meetErr },
+        { data: attData, error: attErr },
+        { data: qcData, error: qcErr },
+      ] = await Promise.all([
+        supabase.from('WeeklyFeedbackAssignment').select('*'),
+        supabase.from('TutorMeeting').select('id, meeting_date, title'),
+        supabase.from('TutorMeetingAttendance').select('meeting_id, tutor_id, tutor_name, status'),
+        supabase.from('QCRecord').select('*'),
+      ]);
 
-      setRecords(allRecords);
-      setTutors((userData || []).filter((u) => u.is_active !== false));
+      if (fbErr) throw fbErr;
+      if (meetErr) throw meetErr;
+      if (attErr) throw attErr;
+      if (qcErr) throw qcErr;
+
+      setFeedbackAssignments(fbData || []);
+      setMeetings(meetData || []);
+      setMeetingAttendances(attData || []);
+      setQcRecords((qcData || []).filter((q) => !q.is_sample));
     } catch (err) {
       toast.error('Failed to load Tutor Administration data', { description: err.message });
     } finally {
@@ -568,33 +294,40 @@ export default function TutorAdmin() {
   }, []);
 
   const courseOptions = useMemo(() => {
-    const set = new Set(records.map((r) => r.course).filter(Boolean));
+    const set = new Set();
+    schedules.forEach((s) => {
+      if (s.course_name) set.add(s.course_name);
+    });
     return Array.from(set).sort();
-  }, [records]);
+  }, [schedules]);
 
-  const teacherOptions = useMemo(() => {
-    const set = new Set(records.map((r) => r.lesson_teacher).filter(Boolean));
+  const tutorOptions = useMemo(() => {
+    const set = new Set();
+    schedules.forEach((s) => {
+      if (s.lesson_teacher) set.add(s.lesson_teacher);
+    });
     return Array.from(set).sort();
-  }, [records]);
+  }, [schedules]);
 
-  const filteredRecords = useMemo(() => {
-    return records.filter((r) => {
-      if (!includeTest && r.is_test_group) return false;
+  // Filter Schedule Records
+  const filteredSchedules = useMemo(() => {
+    return schedules.filter((r) => {
+      if (!showTestGroups && r.is_test_group) return false;
       if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
       if (selectedMonth !== 'all' && String(r.lesson_month) !== selectedMonth) return false;
-      if (selectedWeek !== 'all' && r.week_label !== selectedWeek) return false;
-      if (selectedCourse !== 'all' && r.course !== selectedCourse) return false;
-      if (selectedTutor !== 'all' && r.lesson_teacher !== selectedTutor) return false;
+      if (selectedWeek !== 'all' && getWeekBucket(r.lesson_date) !== selectedWeek) return false;
+      if (selectedCourse !== 'all' && r.course_name !== selectedCourse) return false;
+      if (selectedTutor !== 'all' && !isSameTutor(r.lesson_teacher, selectedTutor)) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.group_title || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${r.course || ''} ${r.lesson_title || ''}`.toLowerCase();
+        const hay = `${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${r.course_name || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
   }, [
-    records,
-    includeTest,
+    schedules,
+    showTestGroups,
     selectedYear,
     selectedMonth,
     selectedWeek,
@@ -603,438 +336,359 @@ export default function TutorAdmin() {
     search,
   ]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [selectedMonth, selectedYear, selectedWeek, selectedCourse, selectedTutor, search, includeTest, activeTab]);
+  // 1 & 2. Lessons Conducted & Student Attendance KPIs
+  const scheduleMetrics = useMemo(() => {
+    const totalSchedules = filteredSchedules.length;
+    const conductedList = filteredSchedules.filter((r) => r.is_conducted);
+    const conductedCount = conductedList.length;
+    const completionPct =
+      totalSchedules > 0 ? Math.round((conductedCount / totalSchedules) * 100) : 0;
 
-  const conductedRecords = useMemo(
-    () => filteredRecords.filter((r) => r.is_conducted),
-    [filteredRecords]
-  );
+    const totalAttended = conductedList.reduce(
+      (sum, r) => sum + (Number(r.students_attended) || 0),
+      0
+    );
+    const totalEnrolled = conductedList.reduce(
+      (sum, r) => sum + parseEnrolledCount(r),
+      0
+    );
+    const attendancePct =
+      conductedCount > 0 && totalEnrolled > 0
+        ? Number(((totalAttended / totalEnrolled) * 100).toFixed(1))
+        : 0;
 
-  const avgAttendance = useMemo(() => {
-    if (!conductedRecords.length) return 0;
-    const sum = conductedRecords.reduce((acc, r) => acc + (r.attendance_pct || 0), 0);
-    return Math.round(sum / conductedRecords.length);
-  }, [conductedRecords]);
+    // Weekly breakdown (W1 - W4)
+    const weeks = ['W1', 'W2', 'W3', 'W4'];
+    const weekLabels = {
+      W1: 'Week 1 (1–7)',
+      W2: 'Week 2 (8–14)',
+      W3: 'Week 3 (15–21)',
+      W4: 'Week 4 (22–End)',
+    };
 
-  const groupClasses = useMemo(() => {
-    const map = new Map();
-    for (const r of filteredRecords) {
-      if (!includeTest && r.is_test_group) continue;
-      const key = r.group_id || r.group_title;
-      if (!key) continue;
+    const weeklyBreakdown = weeks.map((wk) => {
+      const items = conductedList.filter((r) => getWeekBucket(r.lesson_date) === wk);
+      let group = 0;
+      let indiv = 0;
+      let intensive = 0;
+      let att = 0;
+      let enr = 0;
 
-      if (!map.has(key)) {
-        map.set(key, {
-          group_id: r.group_id || '-',
-          group_title: r.group_title || '-',
-          group_type: r.group_type || '-',
-          course: r.course || '-',
-          teacher: r.lesson_teacher || 'Unassigned',
-          format: r.format || '-',
-          kids_count: Math.max(r.students_count || 0, r.students_attended || 0),
-          total_scheduled: 0,
-          conducted_count: 0,
-          latest_lesson: r.lesson_number || 0,
-          latest_date: r.lesson_date || '',
-          att_sum: 0,
+      items.forEach((r) => {
+        const fmt = normalizeFormat(r.group_format || r.course_format);
+        if (fmt === 'Group') group += 1;
+        else if (fmt === 'Individual') indiv += 1;
+        else intensive += 1;
+        att += Number(r.students_attended) || 0;
+        enr += parseEnrolledCount(r);
+      });
+
+      const pct = enr > 0 ? Number(((att / enr) * 100).toFixed(1)) : 0;
+      return {
+        week: wk,
+        period: weekLabels[wk],
+        conducted: items.length,
+        group,
+        indiv,
+        intensive,
+        attended: att,
+        enrolled: enr,
+        avgPct: pct,
+      };
+    });
+
+    // Active classes & kids per course
+    const classMap = new Map();
+    const courseMap = new Map();
+    let lesson1Count = 0;
+    const lesson1Courses = new Set();
+    let fourthLessonCount = 0;
+
+    filteredSchedules.forEach((r) => {
+      const classKey = r.group_code || r.group_id || `${r.course_name}-${r.lesson_teacher}-${r.id}`;
+      const kids = parseEnrolledCount(r);
+      if (!classMap.has(classKey)) {
+        classMap.set(classKey, {
+          classKey,
+          groupCode: r.group_code || '-',
+          courseName: r.course_name || 'Unknown',
+          teacher: r.lesson_teacher || '-',
+          format: normalizeFormat(r.group_format || r.course_format),
+          kids,
+          conducted: r.is_conducted ? 1 : 0,
         });
+      } else {
+        const existing = classMap.get(classKey);
+        existing.kids = Math.max(existing.kids, kids);
+        if (r.is_conducted) existing.conducted += 1;
       }
 
-      const item = map.get(key);
-      item.total_scheduled += 1;
-      item.kids_count = Math.max(item.kids_count, r.students_count || 0, r.students_attended || 0);
-      if (r.lesson_teacher && item.teacher === 'Unassigned') {
-        item.teacher = r.lesson_teacher;
+      const lNum = Number(r.lesson_number);
+      if (lNum === 1) {
+        lesson1Count += 1;
+        if (r.course_name) lesson1Courses.add(r.course_name);
       }
-      if (r.is_conducted) {
-        item.conducted_count += 1;
-        item.att_sum += r.attendance_pct || 0;
+      if (!Number.isNaN(lNum) && lNum > 0 && lNum % 4 === 0) {
+        fourthLessonCount += 1;
       }
-      if ((r.lesson_date || '') >= item.latest_date) {
-        item.latest_date = r.lesson_date || '';
-        item.latest_lesson = Math.max(item.latest_lesson, r.lesson_number || 0);
+    });
+
+    classMap.forEach((cls) => {
+      const prev = courseMap.get(cls.courseName) || {
+        course: cls.courseName,
+        classes: 0,
+        totalKids: 0,
+        conducted: 0,
+      };
+      prev.classes += 1;
+      prev.totalKids += cls.kids;
+      prev.conducted += cls.conducted;
+      courseMap.set(cls.courseName, prev);
+    });
+
+    const totalKids = Array.from(classMap.values()).reduce((s, c) => s + c.kids, 0);
+    const courseDistribution = Array.from(courseMap.values()).sort(
+      (a, b) => b.classes - a.classes
+    );
+
+    return {
+      totalSchedules,
+      conductedCount,
+      completionPct,
+      totalAttended,
+      totalEnrolled,
+      attendancePct,
+      weeklyBreakdown,
+      activeClasses: Array.from(classMap.values()),
+      totalKids,
+      lesson1Count,
+      lesson1DistinctCourses: lesson1Courses.size,
+      fourthLessonCount,
+      courseDistribution,
+    };
+  }, [filteredSchedules]);
+
+  // 3. Discipline KPI (75% Monthly Feedback + 25% Meeting Presence)
+  const disciplineMetrics = useMemo(() => {
+    const filteredFb = feedbackAssignments.filter((a) => {
+      if (a.is_sample) return false;
+      if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
+      if (!isLessonFourMultiple(a)) return false;
+      if (selectedCourse !== 'all' && a.course_name && a.course_name !== selectedCourse) return false;
+      if (selectedTutor !== 'all' && !isSameTutor(a.tutor_name, selectedTutor)) return false;
+
+      if (a.week_start_date) {
+        const [ay, am] = a.week_start_date.split('-');
+        if (selectedYear !== 'all' && ay !== selectedYear) return false;
+        if (selectedMonth !== 'all' && String(Number(am)) !== selectedMonth) return false;
+        if (selectedWeek !== 'all' && getWeekBucket(a.week_start_date) !== selectedWeek) return false;
       }
+      return true;
+    });
+
+    const fbTotal = filteredFb.length;
+    const fbDone = filteredFb.filter(isAssignmentCompleted).length;
+    const fbPct = fbTotal > 0 ? Number(((fbDone / fbTotal) * 100).toFixed(1)) : null;
+
+    const validMeetingMap = new Map();
+    meetings.forEach((m) => {
+      if (!m.meeting_date) return;
+      const [y, mStr] = m.meeting_date.split('-');
+      if (selectedYear !== 'all' && y !== selectedYear) return;
+      if (selectedMonth !== 'all' && String(Number(mStr)) !== selectedMonth) return;
+      if (selectedWeek !== 'all' && getWeekBucket(m.meeting_date) !== selectedWeek) return;
+      validMeetingMap.set(m.id, m);
+    });
+
+    const filteredMeetAtt = meetingAttendances.filter((att) => {
+      if (!validMeetingMap.has(att.meeting_id)) return false;
+      if (selectedTutor !== 'all' && !isSameTutor(att.tutor_name, selectedTutor)) return false;
+      return true;
+    });
+
+    let meetPct = null;
+    let presentCount = 0;
+    let excusedCount = 0;
+    if (filteredMeetAtt.length > 0) {
+      presentCount = filteredMeetAtt.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Present'
+      ).length;
+      excusedCount = filteredMeetAtt.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+      ).length;
+      meetPct = Number(
+        (((presentCount * 1 + excusedCount * 0.75) / filteredMeetAtt.length) * 100).toFixed(1)
+      );
     }
 
-    return Array.from(map.values())
-      .map((c) => ({
-        ...c,
-        avg_attendance: c.conducted_count ? Math.round(c.att_sum / c.conducted_count) : 0,
-      }))
-      .sort((a, b) => a.group_title.localeCompare(b.group_title));
-  }, [filteredRecords, includeTest]);
+    let overallPct = null;
+    if (fbPct !== null && meetPct !== null) {
+      overallPct = Number((fbPct * FEEDBACK_WEIGHT + meetPct * MEETING_WEIGHT).toFixed(1));
+    } else if (fbPct !== null) {
+      overallPct = fbPct;
+    } else if (meetPct !== null) {
+      overallPct = meetPct;
+    }
 
-  const totalKids = useMemo(
-    () => groupClasses.reduce((sum, c) => sum + c.kids_count, 0),
-    [groupClasses]
-  );
+    const weeks = ['W1', 'W2', 'W3', 'W4'];
+    const weeklyTrend = weeks.map((wk) => {
+      const wFb = filteredFb.filter((a) => getWeekBucket(a.week_start_date) === wk);
+      const wFbPct =
+        wFb.length > 0 ? (wFb.filter(isAssignmentCompleted).length / wFb.length) * 100 : null;
 
-  const weeklySummary = useMemo(() => {
-    return WEEKS.map((wk) => {
-      const rows = filteredRecords.filter((r) => r.week_label === wk);
-      const cond = rows.filter((r) => r.is_conducted);
-      const groupCount = cond.filter((r) => r.group_type?.toLowerCase() === 'group').length;
-      const indivCount = cond.filter((r) => r.group_type?.toLowerCase() === 'individual').length;
-      const intensCount = cond.filter((r) => r.group_type?.toLowerCase() === 'intensive').length;
-      const totalAttended = cond.reduce((s, r) => s + (r.students_attended || 0), 0);
-      const avgAtt = cond.length
-        ? Math.round(cond.reduce((s, r) => s + (r.attendance_pct || 0), 0) / cond.length)
-        : 0;
+      const wMeet = filteredMeetAtt.filter((att) => {
+        const mObj = validMeetingMap.get(att.meeting_id);
+        return mObj && getWeekBucket(mObj.meeting_date) === wk;
+      });
+      let wMeetPct = null;
+      if (wMeet.length > 0) {
+        const p = wMeet.filter((r) => normalizeAttendanceStatus(r.status) === 'Present').length;
+        const e = wMeet.filter((r) => normalizeAttendanceStatus(r.status) === 'Excused').length;
+        wMeetPct = ((p * 1 + e * 0.75) / wMeet.length) * 100;
+      }
+
+      let val = overallPct ?? 0;
+      if (wFbPct !== null && wMeetPct !== null) {
+        val = Number((wFbPct * FEEDBACK_WEIGHT + wMeetPct * MEETING_WEIGHT).toFixed(1));
+      } else if (wFbPct !== null) {
+        val = Number(wFbPct.toFixed(1));
+      } else if (wMeetPct !== null) {
+        val = Number(wMeetPct.toFixed(1));
+      }
 
       return {
         week: wk,
-        scheduled: rows.length,
-        conducted: cond.length,
-        groupCount,
-        indivCount,
-        intensCount,
-        totalAttended,
-        avgAtt,
+        value: val,
+        feedback: wFbPct !== null ? Number(wFbPct.toFixed(1)) : 0,
+        meeting: wMeetPct !== null ? Number(wMeetPct.toFixed(1)) : 0,
       };
     });
-  }, [filteredRecords]);
 
-  const courseSummary = useMemo(() => {
-    const map = new Map();
-    for (const cls of groupClasses) {
-      const cName = cls.course || 'Other';
-      if (!map.has(cName)) {
-        map.set(cName, {
-          course: cName,
-          class_count: 0,
-          kids_count: 0,
-          conducted_lessons: 0,
-        });
+    return {
+      overallPct,
+      fbPct,
+      fbDone,
+      fbTotal,
+      meetPct,
+      presentCount,
+      excusedCount,
+      meetTotal: filteredMeetAtt.length,
+      weeklyTrend,
+    };
+  }, [
+    feedbackAssignments,
+    meetings,
+    meetingAttendances,
+    selectedYear,
+    selectedMonth,
+    selectedWeek,
+    selectedCourse,
+    selectedTutor,
+  ]);
+
+  // 4. QC Result Avg KPI (Period 1 vs Period 2)
+  const qcMetrics = useMemo(() => {
+    let targetMonth = selectedMonth === 'all' ? null : Number(selectedMonth);
+    let targetYear = selectedYear === 'all' ? null : Number(selectedYear);
+
+    if (USE_PREV_MONTH_FOR_QC && targetMonth !== null && targetYear !== null) {
+      targetMonth -= 1;
+      if (targetMonth === 0) {
+        targetMonth = 12;
+        targetYear -= 1;
       }
-      const entry = map.get(cName);
-      entry.class_count += 1;
-      entry.kids_count += cls.kids_count;
-      entry.conducted_lessons += cls.conducted_count;
-    }
-    return Array.from(map.values()).sort((a, b) => b.kids_count - a.kids_count);
-  }, [groupClasses]);
-
-  const lesson1Records = useMemo(() => {
-    return filteredRecords
-      .filter((r) => !r.is_test_group && r.lesson_number === 1)
-      .sort((a, b) => (a.lesson_date || '').localeCompare(b.lesson_date || ''));
-  }, [filteredRecords]);
-
-  const lesson1ByCourse = useMemo(() => {
-    const map = new Map();
-    for (const r of lesson1Records) {
-      const cName = r.course || 'Other';
-      if (!map.has(cName)) {
-        map.set(cName, {
-          course: cName,
-          total_classes: 0,
-          conducted_classes: 0,
-          total_kids: 0,
-        });
-      }
-      const item = map.get(cName);
-      item.total_classes += 1;
-      if (r.is_conducted) item.conducted_classes += 1;
-      item.total_kids += Math.max(r.students_count || 0, r.students_attended || 0);
-    }
-    return Array.from(map.values()).sort((a, b) => b.total_classes - a.total_classes);
-  }, [lesson1Records]);
-
-  const multiple4Count = useMemo(
-    () =>
-      filteredRecords.filter(
-        (r) => !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0
-      ).length,
-    [filteredRecords]
-  );
-
-  const filterBadgeText = useMemo(() => {
-    const mName =
-      selectedMonth === 'all'
-        ? 'All Months'
-        : MONTHS.find((m) => m.value === selectedMonth)?.label || selectedMonth;
-    const parts = [
-      `${mName} ${selectedYear === 'all' ? '' : selectedYear}`.trim(),
-      selectedWeek !== 'all' ? selectedWeek : null,
-      selectedCourse !== 'all' ? selectedCourse : null,
-      selectedTutor !== 'all' ? selectedTutor : null,
-    ].filter(Boolean);
-    return parts.join(' · ');
-  }, [selectedMonth, selectedYear, selectedWeek, selectedCourse, selectedTutor]);
-
-  const matchTutorUser = (teacherName) => {
-    if (!teacherName) return null;
-    const clean = teacherName.toLowerCase().trim();
-    return (
-      tutors.find((u) => u.full_name?.toLowerCase().trim() === clean) ||
-      tutors.find(
-        (u) =>
-          u.full_name?.toLowerCase().includes(clean) ||
-          clean.includes(u.full_name?.toLowerCase().trim() || '___')
-      ) ||
-      null
-    );
-  };
-
-  const handleImportSubmit = async () => {
-    if (!importFile) {
-      toast.error('Please select a CSV or Excel file from BO first');
-      return;
     }
 
-    setImporting(true);
-    try {
-      const parsed = await parseBoScheduleFile(importFile);
-      if (!parsed.length) {
-        toast.error('No valid schedule rows were found in the file');
-        setImporting(false);
-        return;
-      }
+    const filteredQc = qcRecords.filter((q) => {
+      if (q.evaluation_score === null || q.evaluation_score === undefined) return false;
+      if (targetYear !== null && Number(q.period_year) !== targetYear) return false;
+      if (targetMonth !== null && Number(q.period_month) !== targetMonth) return false;
+      if (selectedCourse !== 'all' && q.course_name && q.course_name !== selectedCourse) return false;
+      if (selectedTutor !== 'all' && !isSameTutor(q.tutor_name, selectedTutor)) return false;
+      return true;
+    });
 
-      const chunkSize = 300;
-      for (let i = 0; i < parsed.length; i += chunkSize) {
-        const batch = parsed.slice(i, i + chunkSize).map((item) => ({
-          ...item,
-          updated_date: new Date().toISOString(),
-        }));
-
-        const { error: upsertErr } = await supabase
-          .from('BoScheduleRecord')
-          .upsert(batch, { onConflict: 'unique_key' });
-
-        if (upsertErr) throw upsertErr;
-      }
-
-      const classKidsMap = new Map();
-      for (const item of [...records, ...parsed]) {
-        const key = String(item.group_id || item.group_title || '').toLowerCase().trim();
-        if (!key) continue;
-        const count = Math.max(Number(item.students_count) || 0, Number(item.students_attended) || 0);
-        if (count > (classKidsMap.get(key) || 0)) {
-          classKidsMap.set(key, count);
-        }
-      }
-
-      const eligibleMultiple4 = parsed.filter(
-        (r) =>
-          !r.is_test_group &&
-          r.lesson_number > 0 &&
-          r.lesson_number % 4 === 0 &&
-          r.lesson_date >= cutoffDate
-      );
-
-      let assignedCount = 0;
-      if (eligibleMultiple4.length > 0) {
-        const { data: existingTasks } = await supabase
-          .from('TutorTask')
-          .select('title, linked_class_name')
-          .eq('category', 'Student Feedback');
-
-        const existingSignatures = new Set(
-          (existingTasks || []).map(
-            (t) => `${(t.linked_class_name || '').toLowerCase()}__${(t.title || '').toLowerCase()}`
+    const calcAvg = (arr) =>
+      arr.length > 0
+        ? Number(
+            (arr.reduce((sum, q) => sum + Number(q.evaluation_score || 0), 0) / arr.length).toFixed(1)
           )
-        );
+        : null;
 
-        const now = new Date().toISOString();
-        const tasksToCreate = [];
+    const p1List = filteredQc.filter((q) => {
+      const p = String(q.period || q.qc_period || '').toLowerCase();
+      if (p.includes('1') && !p.includes('2')) return true;
+      const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 1);
+      return day <= 15;
+    });
 
-        for (const row of eligibleMultiple4) {
-          const matchedUser = matchTutorUser(row.lesson_teacher);
-          const taskTitle = `Weekly Report - ${row.group_title} (Lesson ${row.lesson_number})`;
-          const sig = `${row.group_title.toLowerCase()}__${taskTitle.toLowerCase()}`;
+    const p2List = filteredQc.filter((q) => {
+      const p = String(q.period || q.qc_period || '').toLowerCase();
+      if (p.includes('2')) return true;
+      const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 16);
+      return day > 15;
+    });
 
-          if (existingSignatures.has(sig)) continue;
-          existingSignatures.add(sig);
+    const overallAvg = calcAvg(filteredQc);
+    const p1Avg = calcAvg(p1List);
+    const p2Avg = calcAvg(p2List);
 
-          const weekBounds = getWeekBoundsFromDate(row.lesson_date);
-          const classKey = String(row.group_id || row.group_title || '').toLowerCase().trim();
-          const detectedStudentCount =
-            classKidsMap.get(classKey) ||
-            Math.max(Number(row.students_count) || 0, Number(row.students_attended) || 0) ||
-            1;
+    const periodTrend = [
+      { period: 'Period 1 (1–15)', value: p1Avg ?? overallAvg ?? 0, count: p1List.length },
+      { period: 'Period 2 (16–End)', value: p2Avg ?? overallAvg ?? 0, count: p2List.length },
+    ];
 
-          tasksToCreate.push({
-            id: makeId(),
-            group_id: makeId(),
-            title: taskTitle,
-            description: `Auto-generated from BO Schedule.\nClass: ${row.group_title} (ID: ${row.group_id})\nCourse: ${row.course}\nLesson: Lesson ${row.lesson_number} (${row.lesson_title})\nSchedule: ${row.lesson_datetime}`,
-            category: 'Student Feedback',
-            priority: 'High',
-            start_date: row.lesson_date,
-            deadline: weekBounds.end,
-            status: 'pending',
-            student_count: detectedStudentCount,
-            completed_count: 0,
-            course_name: row.course || '',
-            assigned_tutor_id: matchedUser?.id || null,
-            assigned_tutor_name: matchedUser?.full_name || row.lesson_teacher || 'Unassigned Tutor',
-            assigned_by_id: currentUser?.id || null,
-            assigned_by_name: currentUser?.full_name || 'System (BO Import)',
-            progress_notes: '',
-            completion_notes: '',
-            revision_note: '',
-            revision_requested: false,
-            linked_week_start_date: weekBounds.start,
-            linked_week_end_date: weekBounds.end,
-            linked_class_name: row.group_title,
-            created_date: now,
-            updated_date: now,
-            created_by_id: currentUser?.id || null,
-            is_sample: false,
-          });
-        }
-
-        if (tasksToCreate.length > 0) {
-          const { error: taskErr } = await supabase.from('TutorTask').insert(tasksToCreate);
-          if (taskErr) {
-            console.error('Auto-assign task warning:', taskErr.message);
-          } else {
-            assignedCount = tasksToCreate.length;
-          }
-        }
-      }
-
-      toast.success(`Successfully imported ${parsed.length} BO schedules!`, {
-        description:
-          assignedCount > 0
-            ? `${assignedCount} Weekly Reports (every 4th lesson starting ${cutoffDate}) were automatically assigned to tutors.`
-            : `Dashboard summary updated (no new 4th-lesson schedules starting ${cutoffDate}).`,
-      });
-
-      setImportOpen(false);
-      setImportFile(null);
-      await loadData();
-    } catch (err) {
-      toast.error('Import failed', { description: err.message });
-    } finally {
-      setImporting(false);
-    }
-  };
+    return {
+      overallAvg,
+      totalCount: filteredQc.length,
+      p1Avg,
+      p1Count: p1List.length,
+      p2Avg,
+      p2Count: p2List.length,
+      periodTrend,
+      records: filteredQc,
+    };
+  }, [qcRecords, selectedMonth, selectedYear, selectedCourse, selectedTutor]);
 
   const handleExportExcel = async () => {
-    if (!filteredRecords.length) {
-      toast.error('No data available in the current filter to export');
-      return;
-    }
-
     try {
       const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
-
-      const sheet1Rows = [
-        ...weeklySummary.map((w) => ({
-          Section: 'Weekly Breakdown',
-          Item: w.week,
-          'Total Scheduled': w.scheduled,
-          'Lessons Conducted': w.conducted,
-          Group: w.groupCount,
-          Individual: w.indivCount,
-          Intensive: w.intensCount,
-          'Students Attended': w.totalAttended,
-          'Avg Attendance (%)': `${w.avgAtt}%`,
-        })),
-        {},
-        ...courseSummary.map((c) => ({
-          Section: 'Course Distribution',
-          Item: c.course,
-          'Total Scheduled': '-',
-          'Lessons Conducted': c.conducted_lessons,
-          Group: `${c.class_count} classes`,
-          Individual: `${c.kids_count} kids`,
-          Intensive: '-',
-          'Students Attended': c.kids_count,
-          'Avg Attendance (%)': '-',
-        })),
+      const summaryRows = [
+        { Metric: 'Lessons Conducted', Value: scheduleMetrics.conductedCount, Detail: `Out of ${scheduleMetrics.totalSchedules} schedules (${scheduleMetrics.completionPct}%)` },
+        { Metric: 'Student Attendance', Value: `${scheduleMetrics.attendancePct}%`, Detail: `${scheduleMetrics.totalAttended} / ${scheduleMetrics.totalEnrolled} students attended` },
+        { Metric: 'Discipline (75/25)', Value: disciplineMetrics.overallPct !== null ? `${disciplineMetrics.overallPct}%` : '-', Detail: `Monthly Feedback: ${disciplineMetrics.fbPct ?? '-'}% | Meeting Presence: ${disciplineMetrics.meetPct ?? '-'}%` },
+        { Metric: 'QC Result Avg', Value: qcMetrics.overallAvg ?? '-', Detail: `Period 1: ${qcMetrics.p1Avg ?? '-'} (${qcMetrics.p1Count}) | Period 2: ${qcMetrics.p2Avg ?? '-'} (${qcMetrics.p2Count})` },
       ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet1Rows), 'Weekly & Course Summary');
-
-      const ws2 = XLSX.utils.json_to_sheet(
-        groupClasses.map((c, i) => ({
-          No: i + 1,
-          'Group ID': c.group_id,
-          'Group Title': c.group_title,
-          Type: c.group_type,
-          Course: c.course,
-          Teacher: c.teacher,
-          'Kids Count': c.kids_count,
-          'Lessons Conducted': c.conducted_count,
-          'Latest Lesson': c.latest_lesson,
-          'Avg Attendance (%)': `${c.avg_attendance}%`,
-        }))
-      );
-      XLSX.utils.book_append_sheet(wb, ws2, 'Group Classes & Kids');
-
-      const ws3 = XLSX.utils.json_to_sheet(
-        lesson1Records.map((r, i) => ({
-          No: i + 1,
-          Date: r.lesson_date,
-          Time: r.lesson_time,
-          'Group ID': r.group_id,
-          'Group Title': r.group_title,
-          Course: r.course,
-          Type: r.group_type,
-          Teacher: r.lesson_teacher || '-',
-          Kids: Math.max(r.students_count || 0, r.students_attended || 0),
-          Status: r.is_conducted ? 'Conducted' : 'Not Conducted',
-        }))
-      );
-      XLSX.utils.book_append_sheet(wb, ws3, 'Lesson 1 Classes');
-
-      const ws4 = XLSX.utils.json_to_sheet(
-        filteredRecords.map((r, i) => ({
-          No: i + 1,
-          Date: r.lesson_date,
-          Time: r.lesson_time,
-          Week: r.week_label,
-          Lesson: r.lesson_number,
-          'Lesson Title': r.lesson_title,
-          'Group ID': r.group_id,
-          'Group Title': r.group_title,
-          'Attendance (%)': `${r.attendance_pct}%`,
-          Students: r.students_raw,
-          Attended: r.students_attended,
-          Teacher: r.lesson_teacher || '-',
-          Type: r.group_type,
-          Course: r.course,
-          Conducted: r.is_conducted ? 'Yes' : 'No',
-        }))
-      );
-      XLSX.utils.book_append_sheet(wb, ws4, 'Raw Schedule');
-
-      const monthLabel =
-        selectedMonth === 'all'
-          ? 'AllMonths'
-          : MONTHS.find((m) => m.value === selectedMonth)?.label || selectedMonth;
-      XLSX.writeFile(wb, `Tutor_Administration_${monthLabel}_${selectedYear}.xlsx`);
-      toast.success('Tutor Administration Excel file downloaded');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'KPI Summary');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(scheduleMetrics.weeklyBreakdown), 'Weekly Attendance');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(scheduleMetrics.courseDistribution), 'Course Distribution');
+      XLSX.writeFile(wb, `Tutor_Administration_${selectedMonth}_${selectedYear}.xlsx`);
+      toast.success('Tutor Administration report downloaded');
     } catch (err) {
-      toast.error('Failed to export Excel', { description: err.message });
+      toast.error('Export failed', { description: err.message });
     }
   };
 
-  const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
-  const paginatedRaw = filteredRecords.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
-  const conductedPct = filteredRecords.length
-    ? Math.round((conductedRecords.length / filteredRecords.length) * 100)
-    : 0;
-
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Tutor Administration</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            BO LMS attendance summary, group classes, kids per course, monthly Lesson 1, & auto-assign every 4th-lesson Weekly Report.
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-2.5">
+            <BarChart2 className="w-7 h-7 text-primary" />
+            Tutor Administration
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            BO LMS attendance summary, group classes, kids per course, monthly Lesson 1, &amp; every 4th-lesson Weekly Report.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={handleExportExcel} className="border-border gap-2">
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Button variant="outline" onClick={handleExportExcel} className="gap-2">
             <FileSpreadsheet className="w-4 h-4" /> Export Excel
           </Button>
-          <Button onClick={() => setImportOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+          <Button className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
             <Upload className="w-4 h-4" /> Import CSV / Excel BO
           </Button>
         </div>
@@ -1042,19 +696,25 @@ export default function TutorAdmin() {
 
       {/* Filter Bar */}
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-            <SelectTrigger><SelectValue placeholder="Month" /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue placeholder="Month" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Months</SelectItem>
               {MONTHS.map((m) => (
-                <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                <SelectItem key={m.value} value={m.value}>
+                  {m.label}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
           <Select value={selectedYear} onValueChange={setSelectedYear}>
-            <SelectTrigger><SelectValue placeholder="Year" /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue placeholder="Year" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Years</SelectItem>
               <SelectItem value="2026">2026</SelectItem>
@@ -1063,31 +723,42 @@ export default function TutorAdmin() {
           </Select>
 
           <Select value={selectedWeek} onValueChange={setSelectedWeek}>
-            <SelectTrigger><SelectValue placeholder="Week" /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue placeholder="Week" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Weeks (W1–W4)</SelectItem>
-              {WEEKS.map((w) => (
-                <SelectItem key={w} value={w}>{w}</SelectItem>
-              ))}
+              <SelectItem value="W1">Week 1 (1–7)</SelectItem>
+              <SelectItem value="W2">Week 2 (8–14)</SelectItem>
+              <SelectItem value="W3">Week 3 (15–21)</SelectItem>
+              <SelectItem value="W4">Week 4 (22–End)</SelectItem>
             </SelectContent>
           </Select>
 
           <Select value={selectedCourse} onValueChange={setSelectedCourse}>
-            <SelectTrigger><SelectValue placeholder="Course" /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue placeholder="All Courses" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Courses</SelectItem>
               {courseOptions.map((c) => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
           <Select value={selectedTutor} onValueChange={setSelectedTutor}>
-            <SelectTrigger><SelectValue placeholder="Tutor" /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue placeholder="All Tutors" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Tutors</SelectItem>
-              {teacherOptions.map((t) => (
-                <SelectItem key={t} value={t}>{t}</SelectItem>
+              {tutorOptions.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {t}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -1097,115 +768,29 @@ export default function TutorAdmin() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search class / ID / tutor..."
+              placeholder="Search class / ID / tutor"
               className="pl-9"
             />
           </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground pt-1">
-          <span>
-            Showing <strong>{filteredRecords.length}</strong> schedules ({conductedRecords.length} valid conducted lessons) · Total database: {records.length} rows
-          </span>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
+          <div>
+            Showing <strong className="text-foreground">{scheduleMetrics.totalSchedules}</strong> schedules (
+            <strong className="text-foreground">{scheduleMetrics.conductedCount}</strong> valid conducted lessons) · Total database:{' '}
+            <strong className="text-foreground">{totalDbRows}</strong> rows
+          </div>
+
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
-              checked={includeTest}
-              onChange={(e) => setIncludeTest(e.target.checked)}
+              checked={showTestGroups}
+              onChange={(e) => setShowTestGroups(e.target.checked)}
               className="rounded border-border"
             />
             <span>Show Test Groups</span>
           </label>
         </div>
-      </div>
-
-      {/* Option B: Bento Grid KPI Cards (Original Theme Colors + Click for Dynamic Chart) */}
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
-          <HeroBentoCard
-            label="Lessons Conducted"
-            value={conductedRecords.length}
-            sub={`Out of ${filteredRecords.length} schedules (${conductedPct}% completion)`}
-            icon={CalendarCheck}
-            tone="bg-primary"
-            barTone="bg-primary"
-            strokeClass="stroke-primary"
-            fillClass="fill-primary/10"
-            sparklineData={weeklySummary.map((w) => w.conducted)}
-            progressPct={conductedPct}
-            onClick={() => setSelectedChartMetric('conducted')}
-          />
-          <HeroBentoCard
-            label="Avg Attendance"
-            value={`${avgAttendance}%`}
-            sub="Average attendance across valid conducted classes"
-            icon={Percent}
-            tone="bg-chart-2"
-            barTone="bg-chart-2"
-            strokeClass="stroke-chart-2"
-            fillClass="fill-chart-2/15"
-            sparklineData={weeklySummary.map((w) => w.avgAtt)}
-            progressPct={avgAttendance}
-            onClick={() => setSelectedChartMetric('attendance')}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
-          <SecondaryBentoCard
-            label="Active Classes"
-            value={groupClasses.length}
-            sub="Group / Individual / Intensive"
-            icon={BookOpen}
-            tone="bg-chart-3"
-            onClick={() => setSelectedChartMetric('classes')}
-          />
-          <SecondaryBentoCard
-            label="Total Kids"
-            value={totalKids}
-            sub="Accumulated students per class"
-            icon={Users}
-            tone="bg-accent"
-            onClick={() => setSelectedChartMetric('kids')}
-          />
-          <SecondaryBentoCard
-            label="Lesson 1 This Month"
-            value={lesson1Records.length}
-            sub={`${lesson1ByCourse.length} distinct courses`}
-            icon={Sparkles}
-            tone="bg-chart-4"
-            onClick={() => setSelectedChartMetric('lesson1')}
-          />
-          <SecondaryBentoCard
-            label="Every 4th Lesson"
-            value={multiple4Count}
-            sub="Lesson 4, 8, 12, 16..."
-            icon={Bell}
-            tone="bg-chart-5"
-            onClick={() => setSelectedChartMetric('multiple4')}
-          />
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex flex-wrap gap-2 border-b border-border pb-2">
-        {[
-          { id: 'overview', label: 'Weekly & Course Summary' },
-          { id: 'classes', label: `Group Classes & Kids (${groupClasses.length})` },
-          { id: 'lesson1', label: `Lesson 1 This Month (${lesson1Records.length})` },
-          { id: 'raw', label: `Schedule Log (${filteredRecords.length})` },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-card border border-border text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
       </div>
 
       {loading ? (
@@ -1214,36 +799,239 @@ export default function TutorAdmin() {
         </div>
       ) : (
         <>
-          {activeTab === 'overview' && (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {/* ROW 1: 4 HERO METRIC CARDS SEJAJAR */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            {/* 1. Lessons Conducted */}
+            <HeroBentoCard
+              icon={CalendarCheck}
+              iconBg="bg-indigo-600"
+              value={scheduleMetrics.conductedCount}
+              title="Lessons Conducted"
+              subtitle={`Out of ${scheduleMetrics.totalSchedules} schedules (${scheduleMetrics.completionPct}%)`}
+              sparkData={scheduleMetrics.weeklyBreakdown.map((w) => ({ name: w.week, value: w.conducted }))}
+              sparkStroke="#4f46e5"
+              progressPct={scheduleMetrics.completionPct}
+              barColor="bg-indigo-600"
+              onViewChart={() => setChartModal('conducted')}
+            />
+
+            {/* 2. Student Attendance */}
+            <HeroBentoCard
+              icon={Percent}
+              iconBg="bg-teal-600"
+              value={`${scheduleMetrics.attendancePct}%`}
+              title="Student Attendance"
+              subtitle={`${scheduleMetrics.totalAttended.toLocaleString()} / ${scheduleMetrics.totalEnrolled.toLocaleString()} kids attended`}
+              sparkData={scheduleMetrics.weeklyBreakdown.map((w) => ({ name: w.week, value: w.avgPct }))}
+              sparkStroke="#0d9488"
+              progressPct={scheduleMetrics.attendancePct}
+              barColor="bg-teal-600"
+              onViewChart={() => setChartModal('attendance')}
+            />
+
+            {/* 3. Discipline (75% Monthly Feedback + 25% Meeting Presence) */}
+            <HeroBentoCard
+              icon={ShieldCheck}
+              iconBg="bg-violet-600"
+              value={disciplineMetrics.overallPct !== null ? `${disciplineMetrics.overallPct}%` : '-'}
+              title="Discipline"
+              subtitle="75% Monthly Feedback + 25% Meeting"
+              sparkData={disciplineMetrics.weeklyTrend}
+              sparkStroke="#7c3aed"
+              progressPct={disciplineMetrics.overallPct ?? 0}
+              barColor="bg-violet-600"
+              badges={[
+                {
+                  label: `Monthly Feedback: ${disciplineMetrics.fbPct !== null ? `${disciplineMetrics.fbPct}%` : '-'}`,
+                  className: 'bg-violet-50 text-violet-700 border-violet-200',
+                },
+                {
+                  label: `Meeting Presence: ${disciplineMetrics.meetPct !== null ? `${disciplineMetrics.meetPct}%` : '-'}`,
+                  className: 'bg-sky-50 text-sky-700 border-sky-200',
+                },
+              ]}
+              onViewChart={() => setChartModal('discipline')}
+            />
+
+            {/* 4. QC Result Avg (Period 1 vs Period 2) */}
+            <HeroBentoCard
+              icon={Star}
+              iconBg="bg-amber-500"
+              value={qcMetrics.overallAvg !== null ? qcMetrics.overallAvg : '-'}
+              title="QC Result Avg"
+              subtitle={`${qcMetrics.totalCount} QC evaluations recorded`}
+              sparkData={qcMetrics.periodTrend}
+              sparkStroke="#f59e0b"
+              progressPct={qcMetrics.overallAvg ?? 0}
+              barColor="bg-amber-500"
+              badges={[
+                {
+                  label: `Period 1: ${qcMetrics.p1Avg !== null ? qcMetrics.p1Avg : '-'}`,
+                  className: 'bg-amber-50 text-amber-800 border-amber-200',
+                },
+                {
+                  label: `Period 2: ${qcMetrics.p2Avg !== null ? qcMetrics.p2Avg : '-'}`,
+                  className: 'bg-orange-50 text-orange-800 border-orange-200',
+                },
+              ]}
+              onViewChart={() => setChartModal('qc')}
+            />
+          </div>
+
+          {/* ROW 2: 4 SECONDARY CARDS SEJAJAR */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div
+              onClick={() => setActiveTab('groups')}
+              className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:border-primary/40 transition-colors"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-xl bg-emerald-600 flex items-center justify-center flex-shrink-0">
+                  <BookOpen className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className="text-xl font-bold text-foreground">{scheduleMetrics.activeClasses.length}</div>
+                  <div className="text-xs font-semibold text-foreground">Active Classes</div>
+                  <div className="text-[11px] text-muted-foreground">Group / Individual / Intensive</div>
+                </div>
+              </div>
+              <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
+            </div>
+
+            <div
+              onClick={() => setActiveTab('groups')}
+              className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:border-primary/40 transition-colors"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-xl bg-indigo-500 flex items-center justify-center flex-shrink-0">
+                  <Users className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className="text-xl font-bold text-foreground">{scheduleMetrics.totalKids}</div>
+                  <div className="text-xs font-semibold text-foreground">Total Kids</div>
+                  <div className="text-[11px] text-muted-foreground">Accumulated students per class</div>
+                </div>
+              </div>
+              <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
+            </div>
+
+            <div
+              onClick={() => setActiveTab('lesson1')}
+              className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:border-primary/40 transition-colors"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-xl bg-amber-500 flex items-center justify-center flex-shrink-0">
+                  <Sparkles className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className="text-xl font-bold text-foreground">{scheduleMetrics.lesson1Count}</div>
+                  <div className="text-xs font-semibold text-foreground">Lesson 1 This Month</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {scheduleMetrics.lesson1DistinctCourses} distinct courses
+                  </div>
+                </div>
+              </div>
+              <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
+            </div>
+
+            <div
+              onClick={() => setActiveTab('log')}
+              className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:border-primary/40 transition-colors"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-xl bg-rose-500 flex items-center justify-center flex-shrink-0">
+                  <Bell className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className="text-xl font-bold text-foreground">{scheduleMetrics.fourthLessonCount}</div>
+                  <div className="text-xs font-semibold text-foreground">Every 4th Lesson</div>
+                  <div className="text-[11px] text-muted-foreground">Lesson 4, 8, 12, 16...</div>
+                </div>
+              </div>
+              <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
+            </div>
+          </div>
+
+          {/* TABS */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('summary')}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+                activeTab === 'summary'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Weekly &amp; Course Summary
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('groups')}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+                activeTab === 'groups'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Group Classes &amp; Kids ({scheduleMetrics.activeClasses.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('lesson1')}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+                activeTab === 'lesson1'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Lesson 1 This Month ({scheduleMetrics.lesson1Count})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('log')}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+                activeTab === 'log'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Schedule Log ({scheduleMetrics.totalSchedules})
+            </button>
+          </div>
+
+          {/* TAB CONTENT */}
+          {activeTab === 'summary' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-card border border-border rounded-2xl p-5">
-                <h2 className="font-semibold text-foreground mb-1">Attendance & Lessons per Week</h2>
-                <p className="text-xs text-muted-foreground mb-4">
-                  Valid criteria: non-Test Group, S Lesson Status &gt; 0%, and Students Attended ≥ 1.
+                <h3 className="font-semibold text-foreground text-base">Attendance &amp; Lessons per Week</h3>
+                <p className="text-xs text-muted-foreground mt-0.5 mb-4">
+                  Valid criteria: non-Test Group, Conducted lessons, and cumulative student attendance ratio.
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-left text-muted-foreground border-b border-border">
-                        <th className="py-2.5 font-medium">Period</th>
-                        <th className="py-2.5 font-medium text-center">Conducted</th>
-                        <th className="py-2.5 font-medium text-center">Group</th>
-                        <th className="py-2.5 font-medium text-center">Indiv</th>
-                        <th className="py-2.5 font-medium text-center">Intensive</th>
-                        <th className="py-2.5 font-medium text-center">Attended</th>
-                        <th className="py-2.5 font-medium text-right">Avg %</th>
+                    <thead className="border-b border-border text-muted-foreground">
+                      <tr className="text-left">
+                        <th className="py-2.5 font-semibold">Period</th>
+                        <th className="py-2.5 font-semibold text-center">Conducted</th>
+                        <th className="py-2.5 font-semibold text-center">Group</th>
+                        <th className="py-2.5 font-semibold text-center">Indiv</th>
+                        <th className="py-2.5 font-semibold text-center">Intensive</th>
+                        <th className="py-2.5 font-semibold text-center">Attended</th>
+                        <th className="py-2.5 font-semibold text-right">Avg %</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {weeklySummary.map((w) => (
+                      {scheduleMetrics.weeklyBreakdown.map((w) => (
                         <tr key={w.week}>
-                          <td className="py-2.5 font-medium text-foreground">{w.week}</td>
-                          <td className="py-2.5 text-center font-semibold text-primary">{w.conducted}</td>
-                          <td className="py-2.5 text-center text-muted-foreground">{w.groupCount}</td>
-                          <td className="py-2.5 text-center text-muted-foreground">{w.indivCount}</td>
-                          <td className="py-2.5 text-center text-muted-foreground">{w.intensCount}</td>
-                          <td className="py-2.5 text-center text-foreground">{w.totalAttended}</td>
-                          <td className="py-2.5 text-right font-medium text-chart-3">{w.avgAtt}%</td>
+                          <td className="py-3 font-medium text-foreground">{w.period}</td>
+                          <td className="py-3 text-center font-semibold text-indigo-600">{w.conducted}</td>
+                          <td className="py-3 text-center text-muted-foreground">{w.group}</td>
+                          <td className="py-3 text-center text-muted-foreground">{w.indiv}</td>
+                          <td className="py-3 text-center text-muted-foreground">{w.intensive}</td>
+                          <td className="py-3 text-center font-semibold text-foreground">
+                            {w.attended}/{w.enrolled}
+                          </td>
+                          <td className="py-3 text-right font-bold text-teal-600">{w.avgPct}%</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1252,330 +1040,250 @@ export default function TutorAdmin() {
               </div>
 
               <div className="bg-card border border-border rounded-2xl p-5">
-                <h2 className="font-semibold text-foreground mb-1">Class & Kids Distribution per Course</h2>
-                <p className="text-xs text-muted-foreground mb-4">
+                <h3 className="font-semibold text-foreground text-base">Class &amp; Kids Distribution per Course</h3>
+                <p className="text-xs text-muted-foreground mt-0.5 mb-4">
                   Active classes, total kids, and conducted lessons per course.
                 </p>
-                {courseSummary.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-6 text-center">No data available for this filter.</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="text-left text-muted-foreground border-b border-border">
-                          <th className="py-2.5 font-medium">Course</th>
-                          <th className="py-2.5 font-medium text-center">Classes</th>
-                          <th className="py-2.5 font-medium text-center">Total Kids</th>
-                          <th className="py-2.5 font-medium text-right">Conducted</th>
+                <div className="overflow-x-auto max-h-80">
+                  <table className="w-full text-xs">
+                    <thead className="border-b border-border text-muted-foreground">
+                      <tr className="text-left">
+                        <th className="py-2.5 font-semibold">Course</th>
+                        <th className="py-2.5 font-semibold text-center">Classes</th>
+                        <th className="py-2.5 font-semibold text-center">Total Kids</th>
+                        <th className="py-2.5 font-semibold text-right">Conducted</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {scheduleMetrics.courseDistribution.map((c) => (
+                        <tr key={c.course}>
+                          <td className="py-3 font-medium text-foreground">{c.course}</td>
+                          <td className="py-3 text-center text-muted-foreground">{c.classes}</td>
+                          <td className="py-3 text-center font-semibold text-foreground">{c.totalKids}</td>
+                          <td className="py-3 text-right font-bold text-emerald-600">{c.conducted}</td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {courseSummary.map((c) => (
-                          <tr key={c.course}>
-                            <td className="py-2.5 font-medium text-foreground max-w-[260px] truncate" title={c.course}>
-                              {c.course}
-                            </td>
-                            <td className="py-2.5 text-center text-foreground">{c.class_count}</td>
-                            <td className="py-2.5 text-center font-semibold text-primary">{c.kids_count}</td>
-                            <td className="py-2.5 text-right text-chart-3 font-medium">{c.conducted_lessons}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
 
-          {activeTab === 'classes' && (
-            <div className="bg-card border border-border rounded-2xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-secondary/50 text-xs text-muted-foreground">
-                    <tr className="text-left">
-                      <th className="px-4 py-3 font-medium">Group ID</th>
-                      <th className="px-4 py-3 font-medium">Class Name</th>
-                      <th className="px-4 py-3 font-medium">Type</th>
-                      <th className="px-4 py-3 font-medium">Course</th>
-                      <th className="px-4 py-3 font-medium">Tutor</th>
-                      <th className="px-4 py-3 font-medium text-center">Kids</th>
-                      <th className="px-4 py-3 font-medium text-center">Conducted</th>
-                      <th className="px-4 py-3 font-medium text-center">Latest Lesson</th>
-                      <th className="px-4 py-3 font-medium text-right">Avg Att</th>
+          {activeTab === 'groups' && (
+            <div className="bg-card border border-border rounded-2xl p-5 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="border-b border-border text-muted-foreground">
+                  <tr className="text-left">
+                    <th className="py-2.5 font-semibold">Group Code</th>
+                    <th className="py-2.5 font-semibold">Course</th>
+                    <th className="py-2.5 font-semibold">Tutor</th>
+                    <th className="py-2.5 font-semibold text-center">Format</th>
+                    <th className="py-2.5 font-semibold text-center">Kids</th>
+                    <th className="py-2.5 font-semibold text-right">Conducted</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {scheduleMetrics.activeClasses.map((cls) => (
+                    <tr key={cls.classKey}>
+                      <td className="py-2.5 font-medium text-foreground">{cls.groupCode}</td>
+                      <td className="py-2.5 text-muted-foreground">{cls.courseName}</td>
+                      <td className="py-2.5 text-foreground">{cls.teacher}</td>
+                      <td className="py-2.5 text-center">{cls.format}</td>
+                      <td className="py-2.5 text-center font-semibold">{cls.kids}</td>
+                      <td className="py-2.5 text-right font-semibold text-indigo-600">{cls.conducted}</td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {groupClasses.length === 0 ? (
-                      <tr>
-                        <td colSpan={9} className="py-10 text-center text-muted-foreground text-sm">
-                          No class data found for this filter.
-                        </td>
-                      </tr>
-                    ) : (
-                      groupClasses.map((cls) => (
-                        <tr key={`${cls.group_id}-${cls.group_title}`} className="hover:bg-secondary/30">
-                          <td className="px-4 py-3 text-xs text-muted-foreground font-mono">{cls.group_id}</td>
-                          <td className="px-4 py-3 font-medium text-foreground">{cls.group_title}</td>
-                          <td className="px-4 py-3 text-xs">
-                            <span className="px-2 py-0.5 rounded-full bg-secondary text-foreground">
-                              {cls.group_type}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-xs text-muted-foreground max-w-[220px] truncate" title={cls.course}>
-                            {cls.course}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-foreground whitespace-nowrap">{cls.teacher}</td>
-                          <td className="px-4 py-3 text-center font-semibold text-primary">{cls.kids_count}</td>
-                          <td className="px-4 py-3 text-center text-foreground">{cls.conducted_count}</td>
-                          <td className="px-4 py-3 text-center text-xs">
-                            <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
-                              Lesson {cls.latest_lesson}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right text-xs font-medium text-chart-3">
-                            {cls.avg_attendance}%
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 
           {activeTab === 'lesson1' && (
-            <div className="space-y-5">
-              <div className="bg-card border border-border rounded-2xl p-5">
-                <h2 className="font-semibold text-foreground mb-3">Lesson 1 Course Summary (New Classes)</h2>
-                {lesson1ByCourse.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No Lesson 1 schedules found in this period.</p>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {lesson1ByCourse.map((item) => (
-                      <div key={item.course} className="border border-border rounded-xl p-3.5 bg-secondary/30">
-                        <div className="text-sm font-semibold text-foreground truncate" title={item.course}>
-                          {item.course}
-                        </div>
-                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                          <span>Total: <strong className="text-foreground">{item.total_classes}</strong> classes</span>
-                          <span>Conducted: <strong className="text-chart-3">{item.conducted_classes}</strong></span>
-                          <span>Kids: <strong className="text-primary">{item.total_kids}</strong></span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-card border border-border rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-secondary/50 text-xs text-muted-foreground">
-                      <tr className="text-left">
-                        <th className="px-4 py-3 font-medium">Date & Time</th>
-                        <th className="px-4 py-3 font-medium">Class Name</th>
-                        <th className="px-4 py-3 font-medium">Course</th>
-                        <th className="px-4 py-3 font-medium">Type</th>
-                        <th className="px-4 py-3 font-medium">Tutor</th>
-                        <th className="px-4 py-3 font-medium text-center">Kids</th>
-                        <th className="px-4 py-3 font-medium text-right">Status</th>
+            <div className="bg-card border border-border rounded-2xl p-5 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="border-b border-border text-muted-foreground">
+                  <tr className="text-left">
+                    <th className="py-2.5 font-semibold">Date</th>
+                    <th className="py-2.5 font-semibold">Group Code</th>
+                    <th className="py-2.5 font-semibold">Course</th>
+                    <th className="py-2.5 font-semibold">Tutor</th>
+                    <th className="py-2.5 font-semibold text-right">Kids</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filteredSchedules
+                    .filter((r) => Number(r.lesson_number) === 1)
+                    .map((r) => (
+                      <tr key={r.id}>
+                        <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
+                        <td className="py-2.5 font-medium text-foreground">{r.group_code || '-'}</td>
+                        <td className="py-2.5 text-muted-foreground">{r.course_name}</td>
+                        <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
+                        <td className="py-2.5 text-right font-semibold">{parseEnrolledCount(r)}</td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {lesson1Records.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">
-                            No Lesson 1 classes found for this filter.
-                          </td>
-                        </tr>
-                      ) : (
-                        lesson1Records.map((r) => (
-                          <tr key={r.id || r.unique_key} className="hover:bg-secondary/30">
-                            <td className="px-4 py-3 text-xs whitespace-nowrap text-foreground">
-                              {r.lesson_date} · {r.lesson_time}
-                            </td>
-                            <td className="px-4 py-3 font-medium text-foreground">{r.group_title}</td>
-                            <td className="px-4 py-3 text-xs text-muted-foreground">{r.course}</td>
-                            <td className="px-4 py-3 text-xs">{r.group_type}</td>
-                            <td className="px-4 py-3 text-xs text-foreground">{r.lesson_teacher || '-'}</td>
-                            <td className="px-4 py-3 text-center font-medium text-primary">
-                              {Math.max(r.students_count || 0, r.students_attended || 0)}
-                            </td>
-                            <td className="px-4 py-3 text-right text-xs">
-                              {r.is_conducted ? (
-                                <span className="px-2 py-0.5 rounded-full bg-chart-3/15 text-chart-3 font-medium">
-                                  Conducted ({r.attendance_pct}%)
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">
-                                  Scheduled / 0%
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                    ))}
+                </tbody>
+              </table>
             </div>
           )}
 
-          {activeTab === 'raw' && (
-            <div className="space-y-4">
-              <div className="bg-card border border-border rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-secondary/50 text-muted-foreground">
-                      <tr className="text-left">
-                        <th className="px-3 py-3 font-medium">Date & Time</th>
-                        <th className="px-3 py-3 font-medium">Week</th>
-                        <th className="px-3 py-3 font-medium">Lesson</th>
-                        <th className="px-3 py-3 font-medium">Group Title</th>
-                        <th className="px-3 py-3 font-medium">Course</th>
-                        <th className="px-3 py-3 font-medium">Tutor</th>
-                        <th className="px-3 py-3 font-medium text-center">Att %</th>
-                        <th className="px-3 py-3 font-medium text-center">Attended</th>
-                        <th className="px-3 py-3 font-medium text-right">Flag</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {paginatedRaw.length === 0 ? (
-                        <tr>
-                          <td colSpan={9} className="py-10 text-center text-muted-foreground">
-                            No schedules found.
-                          </td>
-                        </tr>
-                      ) : (
-                        paginatedRaw.map((r) => {
-                          const isMultiple4 = !r.is_test_group && r.lesson_number > 0 && r.lesson_number % 4 === 0;
-                          return (
-                            <tr key={r.id || r.unique_key} className="hover:bg-secondary/30">
-                              <td className="px-3 py-2.5 whitespace-nowrap text-foreground">
-                                {r.lesson_date} {r.lesson_time}
-                              </td>
-                              <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{r.week_label}</td>
-                              <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-primary">
-                                L{r.lesson_number}
-                              </td>
-                              <td className="px-3 py-2.5 font-medium text-foreground">{r.group_title}</td>
-                              <td className="px-3 py-2.5 text-muted-foreground max-w-[200px] truncate" title={r.course}>
-                                {r.course}
-                              </td>
-                              <td className="px-3 py-2.5 whitespace-nowrap text-foreground">
-                                {r.lesson_teacher || '-'}
-                              </td>
-                              <td className="px-3 py-2.5 text-center font-medium">{r.attendance_pct}%</td>
-                              <td className="px-3 py-2.5 text-center">{r.students_attended}</td>
-                              <td className="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
-                                {isMultiple4 && (
-                                  <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium">
-                                    Weekly Report (L{r.lesson_number})
-                                  </span>
-                                )}
-                                {r.is_conducted ? (
-                                  <span className="px-2 py-0.5 rounded-full bg-chart-3/15 text-chart-3">
-                                    Conducted
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">
-                                    {r.is_test_group ? 'Test' : '0%'}
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {totalPages > 1 && (
-                <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
-              )}
+          {activeTab === 'log' && (
+            <div className="bg-card border border-border rounded-2xl p-5 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="border-b border-border text-muted-foreground">
+                  <tr className="text-left">
+                    <th className="py-2.5 font-semibold">Date</th>
+                    <th className="py-2.5 font-semibold">Group Code</th>
+                    <th className="py-2.5 font-semibold">Course</th>
+                    <th className="py-2.5 font-semibold">Tutor</th>
+                    <th className="py-2.5 font-semibold text-center">Lesson</th>
+                    <th className="py-2.5 font-semibold text-right">Attended</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filteredSchedules.slice(0, 200).map((r) => (
+                    <tr key={r.id}>
+                      <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
+                      <td className="py-2.5 font-medium text-foreground">{r.group_code || '-'}</td>
+                      <td className="py-2.5 text-muted-foreground">{r.course_name}</td>
+                      <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
+                      <td className="py-2.5 text-center">{r.lesson_number ?? '-'}</td>
+                      <td className="py-2.5 text-right font-semibold">
+                        {r.students_attended ?? 0}/{parseEnrolledCount(r)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>
       )}
 
-      {/* Dynamic Chart Pop-Up Dialog */}
-      <DynamicChartModal
-        metricKey={selectedChartMetric}
-        onClose={() => setSelectedChartMetric(null)}
-        filteredRecords={filteredRecords}
-        conductedRecords={conductedRecords}
-        groupClasses={groupClasses}
-        lesson1Records={lesson1Records}
-        weeklySummary={weeklySummary}
-        courseSummary={courseSummary}
-        avgAttendance={avgAttendance}
-        totalKids={totalKids}
-        multiple4Count={multiple4Count}
-        filterBadgeText={filterBadgeText}
-      />
-
-      {/* Import Dialog */}
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
-        <DialogContent className="bg-card border-border max-w-lg">
+      {/* DETAIL CHART DIALOG UNTUK TIAP HERO CARD */}
+      <Dialog open={Boolean(chartModal)} onOpenChange={(open) => !open && setChartModal(null)}>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-foreground">
-              <Upload className="w-5 h-5 text-primary" /> Import BO LMS Schedule
+            <DialogTitle>
+              {chartModal === 'conducted' && 'Lessons Conducted — Weekly Breakdown'}
+              {chartModal === 'attendance' && 'Student Attendance Ratio — Weekly Breakdown'}
+              {chartModal === 'discipline' && 'Discipline Breakdown (75% Monthly Feedback + 25% Meeting Presence)'}
+              {chartModal === 'qc' && 'QC Result Average — Period 1 vs Period 2'}
             </DialogTitle>
-            <p className="text-sm text-muted-foreground">
-              Upload a CSV or Excel file exported from BO LMS. Data will be automatically summarized on the dashboard.
-            </p>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground/80 block">
-                BO Schedule File (.csv / .xlsx)
-              </label>
-              <Input
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                className="cursor-pointer"
-              />
-              {importFile && (
-                <p className="text-xs text-chart-3 flex items-center gap-1 mt-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> {importFile.name}
-                </p>
-              )}
+          {chartModal === 'conducted' && (
+            <div className="h-64 pt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={scheduleMetrics.weeklyBreakdown}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="conducted" name="Conducted Lessons" fill="#4f46e5" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
+          )}
 
-            <div className="bg-secondary/40 border border-border rounded-xl p-3.5 space-y-2">
-              <label className="text-xs font-semibold text-foreground block">
-                Start Auto-Assign Weekly Report (Lesson 4, 8, 12, ...)
-              </label>
-              <Input
-                type="date"
-                value={cutoffDate}
-                onChange={(e) => setCutoffDate(e.target.value)}
-                className="bg-card"
-              />
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Every 4th-lesson schedules <strong>before this date</strong> will only be recorded in the dashboard summary and will{' '}
-                <strong>not</strong> generate tutor tasks. Schedules from this date onward will automatically appear in each tutor&apos;s{' '}
-                <strong>My Assigned Tasks</strong> with the corresponding class name.
-              </p>
+          {chartModal === 'attendance' && (
+            <div className="h-64 pt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={scheduleMetrics.weeklyBreakdown}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="avgPct" name="Attendance %" stroke="#0d9488" strokeWidth={2.5} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
+          )}
 
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setImportOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleImportSubmit} disabled={importing} className="bg-primary hover:bg-primary/90 gap-2">
-                {importing && <Loader2 className="w-4 h-4 animate-spin" />}
-                Import & Process Data
-              </Button>
+          {chartModal === 'discipline' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-violet-50 border border-violet-200">
+                  <div className="text-violet-700 font-medium">Combined Discipline</div>
+                  <div className="text-xl font-bold text-violet-900 mt-0.5">
+                    {disciplineMetrics.overallPct !== null ? `${disciplineMetrics.overallPct}%` : '-'}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary border border-border">
+                  <div className="text-muted-foreground font-medium">Monthly Feedback (75%)</div>
+                  <div className="text-xl font-bold text-foreground mt-0.5">
+                    {disciplineMetrics.fbPct !== null ? `${disciplineMetrics.fbPct}%` : '-'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {disciplineMetrics.fbDone}/{disciplineMetrics.fbTotal} completed
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary border border-border">
+                  <div className="text-muted-foreground font-medium">Meeting Presence (25%)</div>
+                  <div className="text-xl font-bold text-foreground mt-0.5">
+                    {disciplineMetrics.meetPct !== null ? `${disciplineMetrics.meetPct}%` : '-'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Present: {disciplineMetrics.presentCount} · Excused: {disciplineMetrics.excusedCount}
+                  </div>
+                </div>
+              </div>
+
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={disciplineMetrics.weeklyTrend}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Bar dataKey="feedback" name="Monthly Feedback %" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="meeting" name="Meeting Presence %" fill="#0284c7" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </div>
+          )}
+
+          {chartModal === 'qc' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
+                  <div className="text-amber-800 font-medium">Overall QC Avg</div>
+                  <div className="text-xl font-bold text-amber-950 mt-0.5">
+                    {qcMetrics.overallAvg ?? '-'}
+                  </div>
+                  <div className="text-[11px] text-amber-700">{qcMetrics.totalCount} total QCs</div>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary border border-border">
+                  <div className="text-muted-foreground font-medium">Period 1 (1–15)</div>
+                  <div className="text-xl font-bold text-foreground mt-0.5">
+                    {qcMetrics.p1Avg ?? '-'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">{qcMetrics.p1Count} evaluations</div>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary border border-border">
+                  <div className="text-muted-foreground font-medium">Period 2 (16–End)</div>
+                  <div className="text-xl font-bold text-foreground mt-0.5">
+                    {qcMetrics.p2Avg ?? '-'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">{qcMetrics.p2Count} evaluations</div>
+                </div>
+              </div>
+
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={qcMetrics.periodTrend}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Bar dataKey="value" name="QC Average Score" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

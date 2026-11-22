@@ -15,11 +15,15 @@ import {
   FileText,
   Calendar,
   CalendarCheck,
+  ShieldCheck,
   ArrowRight,
 } from 'lucide-react';
 import TutorTasksPanel from '@/components/tasks/TutorTasksPanel';
 import MyWeeklyFeedbackPanel from '@/components/weekly-feedback/MyWeeklyFeedbackPanel';
 import QCSubmissionPanel from '@/components/qc/QCSubmissionPanel';
+
+const FEEDBACK_WEIGHT = 0.75;
+const MEETING_WEIGHT = 0.25;
 
 const normalizeName = (name) =>
   (name || '')
@@ -63,15 +67,30 @@ const isAssignmentCompleted = (assignment) =>
   assignment.is_done === true ||
   ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
 
-function StatCard({ label, value, icon: Icon, color, glow }) {
+const parseEnrolledCount = (r) => {
+  const direct = Number(r.students_count);
+  if (!Number.isNaN(direct) && direct > 0) return direct;
+  const rawMatch = String(r.students_raw || '').match(/^(\d+)/);
+  if (rawMatch) {
+    const parsed = Number(rawMatch[1]);
+    if (parsed > 0) return parsed;
+  }
+  const attended = Number(r.students_attended) || 0;
+  const pct = Number(r.attendance_pct) || 0;
+  if (attended > 0 && pct > 0) return Math.round((attended * 100) / pct);
+  return attended;
+};
+
+function StatCard({ label, value, subtext, icon: Icon, color, glow }) {
   return (
     <div className={`bg-card border border-border rounded-2xl p-6 flex items-center gap-5 ${glow || ''}`}>
       <div className={`w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 ${color}`}>
         {Icon && <Icon className="w-6 h-6 text-white" />}
       </div>
-      <div>
+      <div className="min-w-0">
         <div className="text-2xl font-bold text-foreground">{value}</div>
-        <div className="text-sm text-muted-foreground mt-0.5">{label}</div>
+        <div className="text-sm text-muted-foreground mt-0.5 truncate">{label}</div>
+        {subtext && <div className="text-[11px] text-muted-foreground mt-0.5 truncate">{subtext}</div>}
       </div>
     </div>
   );
@@ -80,9 +99,19 @@ function StatCard({ label, value, icon: Icon, color, glow }) {
 export default function Dashboard() {
   const { currentUser, hasPermission } = useAppAuth();
   const [stats, setStats] = useState({});
+  const [adminKpi, setAdminKpi] = useState({
+    disciplineAvg: null,
+    fbAvg: null,
+    meetAvg: null,
+    qcMonthAvg: null,
+    qcP1Avg: null,
+    qcP2Avg: null,
+  });
   const [myMetric, setMyMetric] = useState({
     classesConducted: 0,
     attendancePct: null,
+    totalAttendedStudents: 0,
+    totalEnrolledStudents: 0,
     disciplinePct: null,
     qualityScore: null,
     complaint: '-',
@@ -90,8 +119,17 @@ export default function Dashboard() {
   });
   const [loading, setLoading] = useState(true);
 
+  const isAdmin = currentUser?.role && !['Tutor'].includes(currentUser.role);
+  const isTutor = currentUser?.role === 'Tutor';
+
   useEffect(() => {
     async function load() {
+      const now = new Date();
+      const curMonth = now.getMonth() + 1;
+      const curYear = now.getFullYear();
+      const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
+      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+
       const [users, qcRecs, fbRecs, courses, modules] = await Promise.all([
         db.entities.CustomUser.list(),
         hasPermission('qc_records') ? db.entities.QCRecord.list() : [],
@@ -106,8 +144,8 @@ export default function Dashboard() {
         tutors,
         admins: users.length - tutors,
         roleCounts: {
-          headOfRetention: users.filter((u) => u.role === 'Head of Retention').length,
           headOfTutor: users.filter((u) => u.role === 'Head of Tutor').length,
+          teamLeader: users.filter((u) => u.role === 'Team Leader').length,
           qcTeam: users.filter((u) => u.role === 'QC Team').length,
           feedbackTeam: users.filter((u) => u.role === 'Feedback Team').length,
         },
@@ -115,10 +153,8 @@ export default function Dashboard() {
 
       if (hasPermission('qc_records')) {
         statsData.qcRecords = qcRecs.length;
-        const thisMonth = new Date().getMonth() + 1;
-        const thisYear = new Date().getFullYear();
         statsData.qcThisMonth = qcRecs.filter(
-          (q) => q.period_month === thisMonth && q.period_year === thisYear
+          (q) => q.period_month === curMonth && q.period_year === curYear
         ).length;
         statsData.avgQcScore =
           qcRecs.length > 0
@@ -142,18 +178,110 @@ export default function Dashboard() {
         statsData.totalModules = modules.length;
       }
 
-      if (currentUser?.role === 'Tutor') {
+      if (isTutor) {
         statsData.myQcRecords = qcRecs.filter((q) => q.tutor_id === currentUser.id).length;
         statsData.myFeedbackRecords = fbRecs.filter((f) => f.tutor_id === currentUser.id).length;
       }
 
-      if (['Tutor', 'Team Leader'].includes(currentUser?.role)) {
+      // 1. Query khusus Admin / Team Leader
+      if (isAdmin) {
         try {
-          const now = new Date();
-          const curMonth = now.getMonth() + 1;
-          const curYear = now.getFullYear();
-          const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
-          const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+          const [{ data: qcData }, { data: fbAssignData }, { data: meetData }, { data: attData }] =
+            await Promise.all([
+              supabase
+                .from('QCRecord')
+                .select('period_month, period_year, evaluation_score, evaluation_date, created_at, period, qc_period, is_sample'),
+              supabase.from('WeeklyFeedbackAssignment').select('*'),
+              supabase.from('TutorMeeting').select('id, meeting_date'),
+              supabase.from('TutorMeetingAttendance').select('meeting_id, status'),
+            ]);
+
+          const curAssignments = (fbAssignData || []).filter((a) => {
+            if (a.is_sample) return false;
+            if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
+            if (!isLessonFourMultiple(a)) return false;
+            if (a.week_start_date) {
+              const [ay, am] = a.week_start_date.split('-');
+              return Number(ay) === curYear && Number(am) === curMonth;
+            }
+            return true;
+          });
+
+          const allFbPct =
+            curAssignments.length > 0
+              ? Number(
+                  ((curAssignments.filter(isAssignmentCompleted).length / curAssignments.length) * 100).toFixed(1)
+                )
+              : null;
+
+          const curMeetingIds = new Set(
+            (meetData || [])
+              .filter((m) => {
+                if (!m.meeting_date) return false;
+                const [y, mStr] = m.meeting_date.split('-');
+                return Number(y) === curYear && Number(mStr) === curMonth;
+              })
+              .map((m) => m.id)
+          );
+          const curMeetAtts = (attData || []).filter((att) => curMeetingIds.has(att.meeting_id));
+          let allMeetPct = null;
+          if (curMeetAtts.length > 0) {
+            const p = curMeetAtts.filter((r) => normalizeAttendanceStatus(r.status) === 'Present').length;
+            const e = curMeetAtts.filter((r) => normalizeAttendanceStatus(r.status) === 'Excused').length;
+            allMeetPct = Number((((p * 1 + e * 0.75) / curMeetAtts.length) * 100).toFixed(1));
+          }
+
+          let allDisciplinePct = null;
+          if (allFbPct !== null && allMeetPct !== null) {
+            allDisciplinePct = Number((allFbPct * FEEDBACK_WEIGHT + allMeetPct * MEETING_WEIGHT).toFixed(1));
+          } else if (allFbPct !== null) {
+            allDisciplinePct = allFbPct;
+          } else if (allMeetPct !== null) {
+            allDisciplinePct = allMeetPct;
+          }
+
+          const curMonthQcs = (qcData || []).filter(
+            (q) =>
+              !q.is_sample &&
+              q.evaluation_score !== null &&
+              q.evaluation_score !== undefined &&
+              Number(q.period_month) === curMonth &&
+              Number(q.period_year) === curYear
+          );
+          const p1Qcs = curMonthQcs.filter((q) => {
+            const p = String(q.period || q.qc_period || '').toLowerCase();
+            if (p.includes('1') && !p.includes('2')) return true;
+            const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 1);
+            return day <= 15;
+          });
+          const p2Qcs = curMonthQcs.filter((q) => {
+            const p = String(q.period || q.qc_period || '').toLowerCase();
+            if (p.includes('2')) return true;
+            const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 16);
+            return day > 15;
+          });
+
+          const avgScore = (arr) =>
+            arr.length > 0
+              ? Number((arr.reduce((s, x) => s + Number(x.evaluation_score || 0), 0) / arr.length).toFixed(1))
+              : null;
+
+          setAdminKpi({
+            disciplineAvg: allDisciplinePct,
+            fbAvg: allFbPct,
+            meetAvg: allMeetPct,
+            qcMonthAvg: avgScore(curMonthQcs),
+            qcP1Avg: avgScore(p1Qcs),
+            qcP2Avg: avgScore(p2Qcs),
+          });
+        } catch (err) {
+          console.error('Error loading admin dashboard KPIs:', err);
+        }
+      }
+
+      // 2. Query khusus Tutor (tampilan tetap seperti semula)
+      if (isTutor) {
+        try {
           const tName = currentUser.full_name || currentUser.username || '';
           const tId = currentUser.id;
 
@@ -161,7 +289,7 @@ export default function Dashboard() {
             await Promise.all([
               supabase
                 .from('BoScheduleRecord')
-                .select('lesson_teacher, lesson_month, lesson_year, attendance_pct, is_conducted, is_test_group')
+                .select('lesson_teacher, lesson_month, lesson_year, attendance_pct, students_count, students_raw, students_attended, is_conducted, is_test_group')
                 .eq('lesson_month', curMonth)
                 .eq('lesson_year', curYear),
               supabase
@@ -176,14 +304,17 @@ export default function Dashboard() {
             (r) => !r.is_test_group && r.is_conducted && isSameTutor(r.lesson_teacher, tName)
           );
           const classesConducted = myConducted.length;
+          const totalAttendedStudents = myConducted.reduce(
+            (s, r) => s + (Number(r.students_attended) || 0),
+            0
+          );
+          const totalEnrolledStudents = myConducted.reduce(
+            (s, r) => s + parseEnrolledCount(r),
+            0
+          );
           const attendancePct =
-            classesConducted > 0
-              ? Number(
-                  (
-                    myConducted.reduce((s, r) => s + (Number(r.attendance_pct) || 0), 0) /
-                    classesConducted
-                  ).toFixed(2)
-                )
+            classesConducted > 0 && totalEnrolledStudents > 0
+              ? Number(((totalAttendedStudents / totalEnrolledStudents) * 100).toFixed(2))
               : null;
 
           const myAssignments = (fbAssignData || []).filter((a) => {
@@ -226,11 +357,14 @@ export default function Dashboard() {
             meetPct = ((present * 1 + excused * 0.75) / myMeetRecs.length) * 100;
           }
 
-          const discParts = [fbPct, meetPct].filter((v) => v !== null);
-          const disciplinePct =
-            discParts.length > 0
-              ? Number((discParts.reduce((a, b) => a + b, 0) / discParts.length).toFixed(2))
-              : null;
+          let disciplinePct = null;
+          if (fbPct !== null && meetPct !== null) {
+            disciplinePct = Number((fbPct * FEEDBACK_WEIGHT + meetPct * MEETING_WEIGHT).toFixed(2));
+          } else if (fbPct !== null) {
+            disciplinePct = Number(fbPct.toFixed(2));
+          } else if (meetPct !== null) {
+            disciplinePct = Number(meetPct.toFixed(2));
+          }
 
           const myQcs = (qcData || []).filter((q) => {
             if (q.is_sample || q.evaluation_score === null || q.evaluation_score === undefined) return false;
@@ -259,6 +393,8 @@ export default function Dashboard() {
           setMyMetric({
             classesConducted,
             attendancePct,
+            totalAttendedStudents,
+            totalEnrolledStudents,
             disciplinePct,
             qualityScore,
             complaint: '-',
@@ -273,10 +409,8 @@ export default function Dashboard() {
       setLoading(false);
     }
     load();
-  }, [currentUser]);
+  }, [currentUser, isAdmin, isTutor]);
 
-  const isAdmin = currentUser?.role && !['Tutor'].includes(currentUser.role);
-  const isTutor = currentUser?.role === 'Tutor';
   const hasQcPermission = hasPermission('qc_records');
   const hasFeedbackPermission = hasPermission('student_feedback');
 
@@ -287,37 +421,53 @@ export default function Dashboard() {
         <p className="text-muted-foreground mt-1">Welcome back, {currentUser?.full_name || 'User'}</p>
       </div>
 
+      {/* ==================== VIEW 1: ADMIN / TEAM LEADER ==================== */}
       {isAdmin && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
             <StatCard
-              label="Total Users"
-              value={loading ? '...' : stats.totalUsers || 0}
+              label="Total Tutors"
+              value={loading ? '...' : stats.tutors || 0}
+              subtext={`${stats.totalUsers || 0} total active users`}
               icon={Users}
               color="bg-primary"
               glow="glow-purple"
             />
             <StatCard
-              label="Total Tutors"
-              value={loading ? '...' : stats.tutors || 0}
-              icon={BookOpen}
-              color="bg-indigo-600"
-              glow="glow-cyan"
+              label="Discipline (75/25)"
+              value={
+                loading
+                  ? '...'
+                  : adminKpi.disciplineAvg !== null
+                  ? `${adminKpi.disciplineAvg}%`
+                  : '-'
+              }
+              subtext={`FB: ${adminKpi.fbAvg ?? '-'}% · Meet: ${adminKpi.meetAvg ?? '-'}%`}
+              icon={ShieldCheck}
+              color="bg-violet-600"
             />
-            {hasQcPermission && (
-              <StatCard
-                label="QC Records"
-                value={loading ? '...' : stats.qcRecords || 0}
-                icon={CheckSquare}
-                color="bg-chart-3"
-              />
-            )}
-            {hasFeedbackPermission && (
+            <StatCard
+              label="QC Result Avg"
+              value={loading ? '...' : adminKpi.qcMonthAvg ?? '-'}
+              subtext={`P1: ${adminKpi.qcP1Avg ?? '-'} · P2: ${adminKpi.qcP2Avg ?? '-'}`}
+              icon={Star}
+              color="bg-amber-500"
+            />
+            {hasFeedbackPermission ? (
               <StatCard
                 label="Feedback Records"
                 value={loading ? '...' : stats.feedbackRecords || 0}
+                subtext={`Avg Point: ${stats.avgFeedbackPoint || 0} / 5`}
                 icon={MessageSquare}
                 color="bg-chart-4"
+              />
+            ) : (
+              <StatCard
+                label="QC Records"
+                value={loading ? '...' : stats.qcRecords || 0}
+                subtext={`${stats.qcThisMonth || 0} this month`}
+                icon={CheckSquare}
+                color="bg-chart-3"
               />
             )}
           </div>
@@ -337,9 +487,9 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Average Score</span>
+                    <span className="text-sm text-muted-foreground">Period 1 / Period 2 Avg</span>
                     <span className="text-sm font-bold text-chart-3">
-                      {loading ? '...' : `${stats.avgQcScore || 0} / 100`}
+                      {loading ? '...' : `${adminKpi.qcP1Avg ?? '-'} / ${adminKpi.qcP2Avg ?? '-'}`}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -405,6 +555,7 @@ export default function Dashboard() {
         </>
       )}
 
+      {/* ==================== VIEW 2: TUTOR (TIDAK ADA PERUBAHAN) ==================== */}
       {isTutor && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -470,6 +621,11 @@ export default function Dashboard() {
                       ? `${myMetric.attendancePct.toFixed(2)}%`
                       : '-'}
                   </div>
+                  {!loading && myMetric.attendancePct !== null && (
+                    <div className="text-[11px] text-muted-foreground">
+                      {myMetric.totalAttendedStudents}/{myMetric.totalEnrolledStudents} kids
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground">Discipline</div>
@@ -544,15 +700,15 @@ export default function Dashboard() {
             </div>
             <div className="space-y-3">
               <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Head of Retention</span>
-                <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
-                  {loading ? '...' : stats.roleCounts?.headOfRetention || 0}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">Head of Tutor</span>
                 <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
                   {loading ? '...' : stats.roleCounts?.headOfTutor || 0}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Team Leader</span>
+                <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
+                  {loading ? '...' : stats.roleCounts?.teamLeader || 0}
                 </span>
               </div>
               <div className="flex justify-between items-center">
