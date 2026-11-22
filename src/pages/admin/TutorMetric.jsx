@@ -48,7 +48,6 @@ const MONTHS = [
 
 const FEEDBACK_WEIGHT = 0.75;
 const MEETING_WEIGHT = 0.25;
-const USE_PREV_MONTH_FOR_QC = false;
 
 const getSortedTokens = (name) => {
   const cleaned = String(name || '')
@@ -148,12 +147,26 @@ const isLessonConducted = (r) => {
   return pct > 0 && attended >= 1;
 };
 
-const getAttendanceDisciplineAccumulation = (item) => {
-  const parts = [item.attendancePct, item.disciplinePct].filter(
-    (v) => v !== null && v !== undefined && !Number.isNaN(v)
-  );
-  if (parts.length === 0) return null;
-  return Number((parts.reduce((sum, v) => sum + v, 0) / parts.length).toFixed(2));
+// Rumus: (Attendance + Discipline + QC) / 3
+const calcCompositeDividedByThree = (attendancePct, disciplinePct, qcAvg) => {
+  const a = attendancePct !== null && attendancePct !== undefined && !Number.isNaN(attendancePct) ? Number(attendancePct) : 0;
+  const d = disciplinePct !== null && disciplinePct !== undefined && !Number.isNaN(disciplinePct) ? Number(disciplinePct) : 0;
+  const q = qcAvg !== null && qcAvg !== undefined && !Number.isNaN(qcAvg) ? Number(qcAvg) : 0;
+  return Number(((a + d + q) / 3).toFixed(2));
+};
+
+const getQcTimestamp = (q) => {
+  const raw = q.evaluation_date || q.evaluated_at || q.updated_at || q.created_at || '';
+  const ts = Date.parse(String(raw));
+  return Number.isNaN(ts) ? 0 : ts;
+};
+
+const isQcEvaluated = (q) => {
+  const hasScore = q.evaluation_score !== null && q.evaluation_score !== undefined && String(q.evaluation_score).trim() !== '';
+  if (!hasScore) return false;
+  const st = String(q.status || q.evaluation_status || '').trim().toLowerCase();
+  if (st === 'pending' || st === 'draft' || st === 'unassigned') return false;
+  return true;
 };
 
 const getPerformanceStatus = (score) => {
@@ -200,8 +213,10 @@ export default function TutorMetric() {
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedStatus, setSelectedStatus] = useState('all');
+  // 'prev_month' = QC Last Month sesuai SOP | 'latest_evaluated' = QC terbaru di bulan tsb yang sudah dievaluasi | 'all_evaluated' = rata-rata QC bulan tsb
+  const [qcMode, setQcMode] = useState('latest_evaluated');
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('att_disc_desc');
+  const [sortBy, setSortBy] = useState('composite_desc');
 
   const [detailModal, setDetailModal] = useState(null);
 
@@ -338,21 +353,26 @@ export default function TutorMetric() {
     });
     const periodMeetAtts = meetingAttendances.filter((att) => validMeetingIds.has(att.meeting_id));
 
+    // Filter QC sesuai pilihan qcMode
     let qcTargetMonth = selectedMonth === 'all' ? null : Number(selectedMonth);
     let qcTargetYear = selectedYear === 'all' ? null : Number(selectedYear);
-    if (USE_PREV_MONTH_FOR_QC && qcTargetMonth !== null && qcTargetYear !== null) {
+
+    if (qcMode === 'prev_month' && qcTargetMonth !== null && qcTargetYear !== null) {
       qcTargetMonth -= 1;
       if (qcTargetMonth === 0) {
         qcTargetMonth = 12;
         qcTargetYear -= 1;
       }
     }
-    const periodQcs = qcRecords.filter((q) => {
-      if (q.evaluation_score === null || q.evaluation_score === undefined) return false;
-      if (qcTargetYear !== null && Number(q.period_year) !== qcTargetYear) return false;
-      if (qcTargetMonth !== null && Number(q.period_month) !== qcTargetMonth) return false;
-      return true;
-    });
+
+    const evaluatedQcs = qcRecords
+      .filter((q) => {
+        if (!isQcEvaluated(q)) return false;
+        if (qcTargetYear !== null && Number(q.period_year) !== qcTargetYear) return false;
+        if (qcTargetMonth !== null && Number(q.period_month) !== qcTargetMonth) return false;
+        return true;
+      })
+      .sort((a, b) => getQcTimestamp(b) - getQcTimestamp(a));
 
     const periodComplaints = complaints.filter((c) => {
       const dateRaw = c.complaint_date || c.created_at || c.date || '';
@@ -416,12 +436,17 @@ export default function TutorMetric() {
         disciplinePct = meetPct;
       }
 
-      const tQc = periodQcs.filter((q) => isSameTutor(q.tutor_name, tutorName));
+      // QC: jika latest_evaluated, ambil evaluasi terbaru yang sudah dievaluasi; selain itu rata-rata evaluasi
+      const tQcAll = evaluatedQcs.filter((q) => isSameTutor(q.tutor_name, tutorName));
+      const tQcSelected =
+        qcMode === 'latest_evaluated' && tQcAll.length > 0 ? [tQcAll[0]] : tQcAll;
+
       const qcAvg =
-        tQc.length > 0
+        tQcSelected.length > 0
           ? Number(
               (
-                tQc.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) / tQc.length
+                tQcSelected.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) /
+                tQcSelected.length
               ).toFixed(1)
             )
           : null;
@@ -431,17 +456,11 @@ export default function TutorMetric() {
       );
       const complaintCount = tComplaints.length;
 
-      const components = [attendancePct, disciplinePct, qcAvg].filter(
-        (v) => v !== null && v !== undefined && !Number.isNaN(v)
-      );
-      const compositeScore =
-        components.length > 0
-          ? Number((components.reduce((a, b) => a + b, 0) / components.length).toFixed(1))
-          : null;
-
+      // Composite = (Attendance + Discipline + QC) / 3
+      const compositeScore = calcCompositeDividedByThree(attendancePct, disciplinePct, qcAvg);
       const status = getPerformanceStatus(compositeScore);
 
-      const baseItem = {
+      return {
         tutorName,
         aliases: group.aliases,
         totalSchedules: tSchedules.length,
@@ -459,17 +478,13 @@ export default function TutorMetric() {
         meetCount: tMeet.length,
         disciplinePct,
         qcAvg,
-        qcCount: tQc.length,
-        qcList: tQc,
+        qcCount: tQcAll.length,
+        qcList: tQcAll,
+        latestQcRecord: tQcAll[0] || null,
         complaintCount,
         complaintList: tComplaints,
         compositeScore,
         status,
-      };
-
-      return {
-        ...baseItem,
-        attDiscAccumulation: getAttendanceDisciplineAccumulation(baseItem),
       };
     });
   }, [
@@ -482,6 +497,7 @@ export default function TutorMetric() {
     complaints,
     selectedMonth,
     selectedYear,
+    qcMode,
   ]);
 
   const filteredAndSortedTutors = useMemo(() => {
@@ -505,16 +521,15 @@ export default function TutorMetric() {
 
     return list.sort((a, b) => {
       if (sortBy === 'name_asc') return a.tutorName.localeCompare(b.tutorName);
-      if (sortBy === 'composite_desc') return (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
       if (sortBy === 'attendance_desc') return (b.attendancePct ?? -1) - (a.attendancePct ?? -1);
       if (sortBy === 'discipline_desc') return (b.disciplinePct ?? -1) - (a.disciplinePct ?? -1);
       if (sortBy === 'qc_desc') return (b.qcAvg ?? -1) - (a.qcAvg ?? -1);
       if (sortBy === 'complaint_desc') return b.complaintCount - a.complaintCount;
       if (sortBy === 'conducted_desc') return b.conductedCount - a.conductedCount;
-      // Default: akumulasi Attendance + Discipline paling tinggi ke paling rendah
-      const diff = (b.attDiscAccumulation ?? -1) - (a.attDiscAccumulation ?? -1);
+      // Default: tertinggi ke terendah berdasarkan (Attendance + Discipline + QC) / 3
+      const diff = (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
       if (diff !== 0) return diff;
-      return (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
+      return (b.attendancePct ?? -1) - (a.attendancePct ?? -1);
     });
   }, [tutorMetricsList, search, selectedStatus, sortBy]);
 
@@ -564,10 +579,10 @@ export default function TutorMetric() {
         'Monthly Feedback (%)': t.fbPct ?? '-',
         'Meeting Presence (%)': t.meetPct ?? '-',
         'Discipline (%)': t.disciplinePct ?? '-',
-        'Att + Disc Accumulation': t.attDiscAccumulation ?? '-',
-        'QC Avg': t.qcAvg ?? '-',
+        'QC Score': t.qcAvg ?? '-',
+        'QC Mode': qcMode,
         Complaints: t.complaintCount,
-        'Composite Score': t.compositeScore ?? '-',
+        'Composite ((Att+Disc+QC)/3)': t.compositeScore ?? '-',
         Status: t.status.label,
       }));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Tutor Metrics');
@@ -590,7 +605,7 @@ export default function TutorMetric() {
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Sorted highest to lowest by Attendance + Discipline accumulation. Click any metric cell for details.
+            Sorted highest to lowest by (Attendance + Discipline + QC) / 3. Click any metric cell for breakdown.
           </p>
         </div>
 
@@ -601,7 +616,7 @@ export default function TutorMetric() {
 
       {/* Filters */}
       <div className="bg-card border border-border rounded-2xl p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
             <SelectTrigger>
               <SelectValue placeholder="Month" />
@@ -627,6 +642,17 @@ export default function TutorMetric() {
             </SelectContent>
           </Select>
 
+          <Select value={qcMode} onValueChange={setQcMode}>
+            <SelectTrigger>
+              <SelectValue placeholder="QC Mode" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="latest_evaluated">QC: Latest Evaluated (Month)</SelectItem>
+              <SelectItem value="prev_month">QC: Last Month (SOP)</SelectItem>
+              <SelectItem value="all_evaluated">QC: All Evaluated (Month)</SelectItem>
+            </SelectContent>
+          </Select>
+
           <Select value={selectedStatus} onValueChange={setSelectedStatus}>
             <SelectTrigger>
               <SelectValue placeholder="All Status" />
@@ -645,11 +671,10 @@ export default function TutorMetric() {
               <SelectValue placeholder="Sort By" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="att_disc_desc">Attendance + Discipline (High–Low)</SelectItem>
-              <SelectItem value="composite_desc">Composite Score (High–Low)</SelectItem>
+              <SelectItem value="composite_desc">Composite ((A+D+Q)/3) High–Low</SelectItem>
               <SelectItem value="attendance_desc">Attendance % (High–Low)</SelectItem>
               <SelectItem value="discipline_desc">Discipline % (High–Low)</SelectItem>
-              <SelectItem value="qc_desc">QC Quality (High–Low)</SelectItem>
+              <SelectItem value="qc_desc">QC Score (High–Low)</SelectItem>
               <SelectItem value="complaint_desc">Complaints (High–Low)</SelectItem>
               <SelectItem value="conducted_desc">Conducted Lessons (High–Low)</SelectItem>
               <SelectItem value="name_asc">Tutor Name (A–Z)</SelectItem>
@@ -723,7 +748,13 @@ export default function TutorMetric() {
           <div>
             <div className="text-2xl font-bold text-foreground">{summaryKpis.avgQc}</div>
             <div className="text-xs font-semibold text-foreground">Avg QC Quality</div>
-            <div className="text-[11px] text-muted-foreground">Mean evaluation score</div>
+            <div className="text-[11px] text-muted-foreground">
+              {qcMode === 'prev_month'
+                ? 'Last month QC (SOP)'
+                : qcMode === 'latest_evaluated'
+                ? 'Latest evaluated QC'
+                : 'All evaluated QC'}
+            </div>
           </div>
         </div>
       </div>
@@ -931,9 +962,17 @@ export default function TutorMetric() {
             <div className="space-y-3 text-xs pt-1">
               <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
                 <div>
-                  <div className="text-amber-800 font-medium">QC Evaluation Average</div>
+                  <div className="text-amber-800 font-medium">
+                    QC Score (
+                    {qcMode === 'prev_month'
+                      ? 'Last Month SOP'
+                      : qcMode === 'latest_evaluated'
+                      ? 'Latest Evaluated'
+                      : 'All Evaluated'}
+                    )
+                  </div>
                   <div className="text-[11px] text-amber-700 mt-0.5">
-                    Based on {activeTutor.qcCount} recorded QC evaluations
+                    {activeTutor.qcCount} evaluated QC record(s) found
                   </div>
                 </div>
                 <div className="text-2xl font-bold text-amber-950">
@@ -948,6 +987,11 @@ export default function TutorMetric() {
                       <div>
                         <div className="font-medium text-foreground">
                           {q.group_title || q.course || `Evaluation #${i + 1}`}
+                          {qcMode === 'latest_evaluated' && i === 0 && (
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold">
+                              Latest
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-muted-foreground">
                           {q.evaluation_date || `${q.period_month || '-'}/${q.period_year || '-'}`}
@@ -959,7 +1003,7 @@ export default function TutorMetric() {
                 </div>
               ) : (
                 <div className="p-3 rounded-xl bg-secondary/40 text-muted-foreground text-center">
-                  No QC records for this period.
+                  No evaluated QC records for this filter.
                 </div>
               )}
             </div>
@@ -997,7 +1041,7 @@ export default function TutorMetric() {
             <div className="space-y-3 text-xs pt-1">
               <div className="p-3.5 rounded-xl bg-secondary border border-border flex items-center justify-between">
                 <div>
-                  <div className="text-muted-foreground font-medium">Composite Score</div>
+                  <div className="text-muted-foreground font-medium">Composite ((Attendance + Discipline + QC) / 3)</div>
                   <div className="text-2xl font-bold text-foreground mt-0.5">
                     {activeTutor.compositeScore !== null ? activeTutor.compositeScore : '-'}
                   </div>
@@ -1023,7 +1067,7 @@ export default function TutorMetric() {
                   </div>
                 </div>
                 <div className="p-2.5 rounded-xl bg-secondary/50 border border-border">
-                  <div className="text-[11px] text-muted-foreground">QC Avg</div>
+                  <div className="text-[11px] text-muted-foreground">QC</div>
                   <div className="font-bold text-amber-600 mt-0.5">
                     {activeTutor.qcAvg !== null ? activeTutor.qcAvg : '-'}
                   </div>
