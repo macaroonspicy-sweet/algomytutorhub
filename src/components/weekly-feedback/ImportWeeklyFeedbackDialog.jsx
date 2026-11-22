@@ -14,7 +14,7 @@ function parseDateSafe(val) {
     const d = new Date(Math.round((val - 25569) * 86400 * 1000));
     return d.toISOString().slice(0, 10);
   }
-  const str = String(val).trim();
+  const str = String(val).replace(/\u00a0/g, ' ').trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
   const dmy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (dmy) {
@@ -42,7 +42,13 @@ function parseLessonNumber(rawLesson, rawNotes) {
   return null;
 }
 
-export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors = [], existingAssignments = [], onImported }) {
+export default function ImportWeeklyFeedbackDialog({
+  open,
+  onOpenChange,
+  tutors = [],
+  existingAssignments = [],
+  onImported,
+}) {
   const [rows, setRows] = useState([]);
   const [fileName, setFileName] = useState('');
   const [importing, setImporting] = useState(false);
@@ -57,7 +63,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
     reader.onload = (evt) => {
       try {
         const bstr = evt.target.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
         const wsName = wb.SheetNames[0];
         const ws = wb.Sheets[wsName];
         const rawData = XLSX.utils.sheet_to_json(ws, { defval: '' });
@@ -67,21 +73,53 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
             const keys = Object.keys(r);
             const findVal = (candidates) => {
               const k = keys.find((key) =>
-                candidates.some((c) => key.toLowerCase().trim() === c.toLowerCase())
+                candidates.some((c) => key.replace(/\u00a0/g, ' ').toLowerCase().trim() === c.toLowerCase())
               );
               return k ? r[k] : '';
             };
 
-            const className = String(findVal(['Class Name', 'Class', 'Group', 'Nama Kelas']) || '').trim();
-            const courseName = String(findVal(['Course Name', 'Course', 'Subject', 'Kursus']) || '').trim();
-            const rawTutor = String(findVal(['Tutor Name', 'Tutor', 'Teacher', 'Nama Tutor']) || '').trim();
-            const rawTutorId = String(findVal(['Tutor ID', 'tutor_id', 'ID Tutor']) || '').trim();
-            const studentCount = parseInt(findVal(['Student Count', 'Students', 'Jumlah Siswa']) || '1', 10) || 1;
-            const weekStart = parseDateSafe(findVal(['Period Start', 'Week Start', 'Start Date', 'Start', 'Mulai']));
-            const weekEnd = parseDateSafe(findVal(['Period End', 'Week End', 'End Date', 'End', 'Selesai']));
-            const rawNotes = String(findVal(['Notes', 'Note', 'Catatan']) || '').trim();
-            const rawLesson = findVal(['Lesson', 'Lesson Number', 'Lesson #', 'Pertemuan']);
-            const rawMonth = String(findVal(['Month', 'Bulan']) || '').trim();
+            const classCode = String(
+              findVal(['Class Code', 'class_code', 'Class code', 'classCode', 'Kode Kelas']) || ''
+            )
+              .replace(/\u00a0/g, ' ')
+              .trim();
+            const rawClassName = String(
+              findVal(['Class Name', 'class_name', 'Class', 'Group', 'Nama Kelas']) || ''
+            )
+              .replace(/\u00a0/g, ' ')
+              .trim();
+
+            const finalClassName = rawClassName || classCode;
+            const finalClassCode = classCode || rawClassName;
+
+            const courseName = String(
+              findVal(['Course Name', 'course_name', 'Course', 'Subject', 'Kursus']) || ''
+            )
+              .replace(/\u00a0/g, ' ')
+              .trim();
+            const rawTutor = String(
+              findVal(['Tutor Name', 'tutor_name', 'Tutor', 'Teacher', 'Nama Tutor']) || ''
+            )
+              .replace(/\u00a0/g, ' ')
+              .trim();
+            const rawTutorId = String(
+              findVal(['Tutor ID', 'tutor_id', 'ID Tutor']) || ''
+            )
+              .replace(/\u00a0/g, ' ')
+              .trim();
+            const studentCount =
+              parseInt(findVal(['Student Count', 'student_count', 'Students', 'Jumlah Siswa']) || '1', 10) || 1;
+            const weekStart = parseDateSafe(
+              findVal(['Week Start', 'week_start_date', 'Period Start', 'Start Date', 'Start', 'Mulai'])
+            );
+            const weekEnd = parseDateSafe(
+              findVal(['Week End', 'week_end_date', 'Period End', 'End Date', 'End', 'Selesai'])
+            );
+            const rawNotes = String(findVal(['Notes', 'notes', 'Note', 'Catatan']) || '')
+              .replace(/\u00a0/g, ' ')
+              .trim();
+            const rawLesson = findVal(['Lesson', 'lesson_number', 'Lesson Number', 'Lesson #', 'Pertemuan']);
+            const rawMonth = String(findVal(['Month', 'month', 'Bulan']) || '').trim();
 
             const parsedLesson = parseLessonNumber(rawLesson, rawNotes);
             const computedMonth = rawMonth || calcMonthFromLesson(parsedLesson);
@@ -99,15 +137,16 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
               );
             }
 
-            const isDuplicate = existingAssignments.some(
-              (ex) =>
-                (ex.class_name || '').toLowerCase().trim() === className.toLowerCase() &&
-                (ex.week_start_date || '').slice(0, 10) === weekStart
-            );
+            const targetClassKey = (finalClassName || finalClassCode).toLowerCase().trim();
+            const isDuplicate = existingAssignments.some((ex) => {
+              const exKey = (ex.class_name || ex.class_code || '').toLowerCase().trim();
+              return exKey && targetClassKey && exKey === targetClassKey && (ex.week_start_date || '').slice(0, 10) === weekStart;
+            });
 
             return {
               _idx: idx + 1,
-              class_name: className,
+              class_name: finalClassName,
+              class_code: finalClassCode,
               course_name: courseName || 'Visual Programming',
               tutor_id: matchedTutor?.id || rawTutorId || '',
               tutor_name: matchedTutor?.full_name || rawTutor || 'Unassigned',
@@ -119,10 +158,10 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
               notes: finalNotes,
               _matched: Boolean(matchedTutor),
               _duplicate: isDuplicate,
-              _valid: Boolean(className),
+              _valid: Boolean(finalClassName || finalClassCode),
             };
           })
-          .filter((item) => item.class_name || item.tutor_name !== 'Unassigned');
+          .filter((item) => item.class_name || item.class_code || item.tutor_name !== 'Unassigned');
 
         setRows(mapped);
       } catch (err) {
@@ -130,6 +169,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
       }
     };
     reader.readAsBinaryString(file);
+    if (e.target) e.target.value = '';
   };
 
   const validRows = rows.filter((r) => r._valid && !r._duplicate);
@@ -147,13 +187,12 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
       }));
 
       let { error } = await supabase.from('WeeklyFeedbackAssignment').insert(payload);
-      if (error && /lesson_number|month/i.test(error.message)) {
-        const fallbackPayload = payload.map(({ lesson_number, month, ...rest }) => rest);
+      if (error && /lesson_number|month|class_code/i.test(error.message)) {
+        const fallbackPayload = payload.map(({ lesson_number, month, class_code, ...rest }) => rest);
         ({ error } = await supabase.from('WeeklyFeedbackAssignment').insert(fallbackPayload));
       }
       if (error) throw error;
 
-      // Push Telegram notification summary per connected active tutor
       triggerTelegramNotification('monthly_feedback_assigned', payload);
 
       toast.success(`Imported ${payload.length} monthly feedback assignments!`);
@@ -195,7 +234,7 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
               {fileName ? fileName : 'Click to upload Excel (.xlsx, .xls) or CSV file'}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Supported columns: Class Name, Course Name, Tutor Name, Tutor ID, Lesson, Month, Period Start, Period End, Student Count, Notes
+              Supported columns: Class Code, Class Name, Course Name, Tutor Name, Tutor ID, Lesson, Month, Week Start, Week End, Student Count, Notes
             </p>
           </div>
 
@@ -240,12 +279,12 @@ export default function ImportWeeklyFeedbackDialog({ open, onOpenChange, tutors 
                   <tbody className="divide-y divide-border">
                     {rows.map((r) => (
                       <tr key={r._idx} className={r._duplicate ? 'opacity-50 bg-amber-500/5' : ''}>
-                        <td className="px-3 py-2 font-medium">{r.class_name || '—'}</td>
+                        <td className="px-3 py-2 font-medium">{r.class_name || r.class_code || '—'}</td>
                         <td className="px-3 py-2 text-muted-foreground">{r.course_name}</td>
                         <td className="px-3 py-2">
                           {r.lesson_number ? (
                             <span className="font-medium text-primary">
-                              L{r.lesson_number} ({r.month})
+                              L{r.lesson_number}{r.month ? ` (${r.month})` : ''}
                             </span>
                           ) : (
                             <span className="text-muted-foreground">{r.notes || '—'}</span>

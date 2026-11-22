@@ -1,11 +1,25 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '@/lib/supabaseClient';
 import { useAppAuth } from '@/lib/AppAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Download, Upload, FileSpreadsheet, Loader2, Pencil, Trash2, Check, Filter } from 'lucide-react';
+import {
+  Plus,
+  Search,
+  Download,
+  Upload,
+  FileSpreadsheet,
+  Loader2,
+  Pencil,
+  Trash2,
+  Check,
+  Filter,
+  CheckCircle2,
+  CalendarClock,
+  AlertTriangle,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import AssignmentFormDialog from '@/components/weekly-feedback/AssignmentFormDialog';
@@ -145,6 +159,46 @@ export default function WeeklyFeedback() {
     }
     return true;
   });
+
+  const statusPercentages = useMemo(() => {
+    const total = filtered.length;
+    if (total === 0) {
+      return {
+        total: 0,
+        doneCount: 0,
+        rescheduleCount: 0,
+        overdueCount: 0,
+        donePct: 0,
+        reschedulePct: 0,
+        overduePct: 0,
+      };
+    }
+
+    let doneCount = 0;
+    let rescheduleCount = 0;
+    let overdueCount = 0;
+
+    filtered.forEach((item) => {
+      const st = String(assignmentStatus(item) || '').toLowerCase();
+      if (st === 'completed' || st === 'done_overdue' || item?.is_done === true) {
+        doneCount += 1;
+      } else if (st === 'rescheduled') {
+        rescheduleCount += 1;
+      } else if (st === 'overdue') {
+        overdueCount += 1;
+      }
+    });
+
+    return {
+      total,
+      doneCount,
+      rescheduleCount,
+      overdueCount,
+      donePct: Number(((doneCount / total) * 100).toFixed(1)),
+      reschedulePct: Number(((rescheduleCount / total) * 100).toFixed(1)),
+      overduePct: Number(((overdueCount / total) * 100).toFixed(1)),
+    };
+  }, [filtered]);
 
   useEffect(() => {
     setPage(1);
@@ -296,6 +350,48 @@ export default function WeeklyFeedback() {
 
       <WeeklyFeedbackStats items={filtered} />
 
+      {/* Persentase Done, Reschedule, dan Overdue */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between">
+          <div>
+            <div className="text-xs font-medium text-muted-foreground">Done Percentage</div>
+            <div className="text-2xl font-bold text-emerald-600 mt-1">{statusPercentages.donePct}%</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              {statusPercentages.doneCount} of {statusPercentages.total} assignments completed
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between">
+          <div>
+            <div className="text-xs font-medium text-muted-foreground">Reschedule Percentage</div>
+            <div className="text-2xl font-bold text-amber-600 mt-1">{statusPercentages.reschedulePct}%</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              {statusPercentages.rescheduleCount} of {statusPercentages.total} assignments rescheduled
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+            <CalendarClock className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-2xl p-4 flex items-center justify-between">
+          <div>
+            <div className="text-xs font-medium text-muted-foreground">Overdue Percentage</div>
+            <div className="text-2xl font-bold text-rose-600 mt-1">{statusPercentages.overduePct}%</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              {statusPercentages.overdueCount} of {statusPercentages.total} assignments overdue
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-rose-600 flex items-center justify-center">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
       <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
         <div className="flex flex-col lg:flex-row gap-3">
           <div className="relative flex-1">
@@ -337,7 +433,9 @@ export default function WeeklyFeedback() {
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Filter className="w-3 h-3" />
-          <span>{filtered.length} of {items.length} monthly report assignments</span>
+          <span>
+            {filtered.length} of {items.length} monthly report assignments · Done: {statusPercentages.donePct}% · Reschedule: {statusPercentages.reschedulePct}% · Overdue: {statusPercentages.overduePct}%
+          </span>
           {anyFilter && (
             <Button size="sm" variant="ghost" onClick={() => { setSearch(''); setWeek('all'); setClassFilter('all'); setTutor('all'); setStatus('all'); }} className="h-6 px-2">Clear all</Button>
           )}
@@ -447,7 +545,13 @@ export default function WeeklyFeedback() {
         courses={courses}
         onSaved={loadAll}
       />
-      <ImportWeeklyFeedbackDialog open={importOpen} onOpenChange={setImportOpen} onImported={loadAll} />
+      <ImportWeeklyFeedbackDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        tutors={tutors}
+        existingAssignments={items}
+        onImported={loadAll}
+      />
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
