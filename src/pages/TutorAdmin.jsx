@@ -30,6 +30,9 @@ import {
   Upload,
   Loader2,
   ArrowUpRight,
+  FileUp,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -119,7 +122,6 @@ const parsePercentNumber = (val) => {
   return Number.isNaN(num) ? 0 : num;
 };
 
-// Jumlah student seharusnya (dari students_raw / students_count)
 const parseExpectedStudentsCount = (r) => {
   const rawCount = parseLeadingInt(r.students_raw);
   if (rawCount > 0) return rawCount;
@@ -143,6 +145,18 @@ const getWeekBucket = (dateStr) => {
   if (day <= 14) return 'W2';
   if (day <= 21) return 'W3';
   return 'W4';
+};
+
+const getWeekLabel = (dateStr) => {
+  if (!dateStr) return null;
+  const match = String(dateStr).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const day = Number(match[3]);
+  if (day >= 1 && day <= 7) return 'Week 1';
+  if (day >= 8 && day <= 14) return 'Week 2';
+  if (day >= 15 && day <= 21) return 'Week 3';
+  if (day >= 22) return 'Week 4';
+  return null;
 };
 
 const getCourseLabel = (r) => {
@@ -202,18 +216,51 @@ const parseIsoDate = (rawVal) => {
     return rawVal.toISOString().slice(0, 10);
   }
   const str = String(rawVal).replace(/\u00a0/g, ' ').trim();
-  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
-  if (dotMatch) {
-    const dd = dotMatch[1].padStart(2, '0');
-    const mm = dotMatch[2].padStart(2, '0');
-    const yyyy = dotMatch[3];
+  const dotOrSlashMatch = str.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+  if (dotOrSlashMatch) {
+    const dd = dotOrSlashMatch[1].padStart(2, '0');
+    const mm = dotOrSlashMatch[2].padStart(2, '0');
+    const yyyy = dotOrSlashMatch[3];
     return `${yyyy}-${mm}-${dd}`;
   }
-  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  const ymdMatch = str.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (ymdMatch) {
+    const yyyy = ymdMatch[1];
+    const mm = ymdMatch[2].padStart(2, '0');
+    const dd = ymdMatch[3].padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
   const parsed = new Date(str);
   if (!Number.isNaN(parsed.getTime())) {
     return parsed.toISOString().slice(0, 10);
   }
+  return null;
+};
+
+const parseLessonTime = (rawTime, rawDatetime) => {
+  const source = `${String(rawTime || '').trim()} ${String(rawDatetime || '').trim()}`;
+  const match = source.match(/(\d{1,2}:\d{2})/);
+  if (!match) return null;
+  const [hh, mm] = match[1].split(':');
+  return `${hh.padStart(2, '0')}:${mm}`;
+};
+
+const formatLessonDatetime = (rawDatetime, isoDate, lessonTime) => {
+  if (rawDatetime instanceof Date && !Number.isNaN(rawDatetime.getTime())) {
+    const dd = String(rawDatetime.getDate()).padStart(2, '0');
+    const mm = String(rawDatetime.getMonth() + 1).padStart(2, '0');
+    const yyyy = rawDatetime.getFullYear();
+    const hh = String(rawDatetime.getHours()).padStart(2, '0');
+    const min = String(rawDatetime.getMinutes()).padStart(2, '0');
+    return `${dd}.${mm}.${yyyy} ${hh}:${min}`;
+  }
+  const dtStr = String(rawDatetime || '').trim();
+  if (dtStr) return dtStr;
+  if (isoDate && lessonTime) {
+    const [yyyy, mm, dd] = isoDate.split('-');
+    return `${dd}.${mm}.${yyyy} ${lessonTime}`;
+  }
+  if (isoDate) return isoDate;
   return null;
 };
 
@@ -306,6 +353,11 @@ export default function TutorAdmin() {
 
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [selectedImportFile, setSelectedImportFile] = useState(null);
+  const [parsedPreviewCount, setParsedPreviewCount] = useState(0);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+
   const [schedules, setSchedules] = useState([]);
   const [totalDbRows, setTotalDbRows] = useState(0);
   const [feedbackAssignments, setFeedbackAssignments] = useState([]);
@@ -371,39 +423,80 @@ export default function TutorAdmin() {
     loadData();
   }, []);
 
-  const handleImportClick = () => {
+  const openChooseFilePage = () => {
     if (importing) return;
-    fileInputRef.current?.click();
+    setSelectedImportFile(null);
+    setParsedPreviewCount(0);
+    setImportModalOpen(true);
   };
 
-  const handleImportFile = async (e) => {
-    const file = e.target.files?.[0];
+  const inspectSelectedFile = async (file) => {
     if (!file) return;
-
-    setImporting(true);
+    setSelectedImportFile(file);
     try {
       const XLSX = await import('xlsx');
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+      setParsedPreviewCount(Array.isArray(rows) ? rows.length : 0);
+    } catch {
+      setParsedPreviewCount(0);
+    }
+  };
+
+  const handleFileInputChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await inspectSelectedFile(file);
+    }
+    if (e.target) e.target.value = '';
+  };
+
+  const handleConfirmImport = async () => {
+    if (!selectedImportFile || importing) return;
+
+    setImporting(true);
+    try {
+      const XLSX = await import('xlsx');
+      const buffer = await selectedImportFile.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
 
       if (!rows || rows.length === 0) {
-        toast.warning('No rows found in the imported file');
+        toast.warning('No rows found in the selected file');
         return;
       }
 
       const mappedRows = rows
-        .map((row) => {
-          const rawDate = pickCell(row, [
+        .map((row, idx) => {
+          const rawDatetime = pickCell(row, [
+            'lesson_datetime',
+            'Lesson Datetime',
+            'Date Time',
             'Time of next lesson',
+            'datetime',
+          ]);
+          const rawDate = pickCell(row, [
             'lesson_date',
-            'date',
             'Lesson Date',
+            'Time of next lesson',
+            'date',
             'Date',
           ]);
-          const isoDate = parseIsoDate(rawDate);
+          const rawTime = pickCell(row, [
+            'lesson_time',
+            'Lesson Time',
+            'Time',
+            'time',
+            'Start Time',
+          ]);
+
+          const isoDate = parseIsoDate(rawDate || rawDatetime);
           const dateParts = isoDate ? isoDate.split('-') : [];
+          const lessonTime = parseLessonTime(rawTime, rawDatetime || rawDate);
+          const lessonDatetime = formatLessonDatetime(rawDatetime, isoDate, lessonTime);
 
           const lessonYear =
             Number(pickCell(row, ['lesson_year', 'year', 'Year'])) ||
@@ -411,6 +504,11 @@ export default function TutorAdmin() {
           const lessonMonth =
             Number(pickCell(row, ['lesson_month', 'month', 'Month'])) ||
             (dateParts[1] ? Number(dateParts[1]) : Number(selectedMonth) || 11);
+
+          const rawWeekLabel = String(
+            pickCell(row, ['week_label', 'Week Label', 'Week', 'week'])
+          ).trim();
+          const weekLabel = rawWeekLabel || getWeekLabel(isoDate);
 
           const groupTitle = String(
             pickCell(row, [
@@ -426,6 +524,20 @@ export default function TutorAdmin() {
           ).trim();
           const groupId = String(
             pickCell(row, ['Group ID', 'group_id', 'Group ID', 'id', 'ID'])
+          ).trim();
+          const lessonTitle = String(
+            pickCell(row, [
+              'lesson_title',
+              'Lesson Title',
+              'Lesson Topic',
+              'lesson_topic',
+              'Topic',
+              'topic',
+              'Title',
+              'title',
+              'Lesson Name',
+              'lesson_name',
+            ])
           ).trim();
           const courseValue = String(
             pickCell(row, [
@@ -515,26 +627,41 @@ export default function TutorAdmin() {
             String(groupTitle).toLowerCase().includes('test') ||
             String(pickCell(row, ['is_test_group', 'test_group'])).toLowerCase() === 'true';
 
+          const explicitUniqueKey = String(
+            pickCell(row, ['unique_key', 'Unique Key', 'uniqueKey'])
+          ).trim();
+
+          const keyPrefix = groupId || groupTitle || lessonTeacher || `row${idx + 1}`;
+          const uniqueKey =
+            explicitUniqueKey ||
+            `${keyPrefix}_${isoDate || 'nodate'}_${lessonTime || 'notime'}_${lessonNumber ?? 0}`;
+
           if (!groupTitle && !groupId && !lessonTeacher && !isoDate) return null;
 
           return {
+            unique_key: uniqueKey,
+            lesson_datetime: lessonDatetime,
             lesson_date: isoDate,
-            lesson_year: lessonYear,
+            lesson_time: lessonTime,
             lesson_month: lessonMonth,
-            group_title: groupTitle || null,
+            lesson_year: lessonYear,
+            week_label: weekLabel,
+            lesson_number: lessonNumber,
+            lesson_title: lessonTitle || null,
             group_id: groupId || null,
-            course: courseValue || null,
+            group_title: groupTitle || null,
+            attendance_pct: Math.round(statusPct),
+            students_count: expectedStudents,
+            students_raw: studentsRaw || null,
+            students_attended: studentsAttended,
+            lesson_teacher: lessonTeacher || null,
             group_type: groupTypeValue || null,
+            course: courseValue || null,
             format: formatValue || null,
             branch: branchValue || null,
-            lesson_teacher: lessonTeacher || null,
-            attendance_pct: Math.round(statusPct),
-            students_raw: studentsRaw || null,
-            students_count: expectedStudents,
-            students_attended: studentsAttended,
-            is_conducted: isConducted,
-            lesson_number: lessonNumber,
             is_test_group: isTestGroup,
+            is_conducted: isConducted,
+            updated_date: new Date().toISOString(),
           };
         })
         .filter(Boolean);
@@ -547,17 +674,21 @@ export default function TutorAdmin() {
       const chunkSize = 500;
       for (let i = 0; i < mappedRows.length; i += chunkSize) {
         const chunk = mappedRows.slice(i, i + chunkSize);
-        const { error } = await supabase.from('BoScheduleRecord').insert(chunk);
+        const { error } = await supabase
+          .from('BoScheduleRecord')
+          .upsert(chunk, { onConflict: 'unique_key' });
         if (error) throw error;
       }
 
       toast.success(`Imported ${mappedRows.length} BO schedule rows successfully`);
+      setImportModalOpen(false);
+      setSelectedImportFile(null);
+      setParsedPreviewCount(0);
       await loadData();
     } catch (err) {
       toast.error('Failed to import CSV / Excel BO', { description: err.message });
     } finally {
       setImporting(false);
-      if (e.target) e.target.value = '';
     }
   };
 
@@ -604,8 +735,6 @@ export default function TutorAdmin() {
     search,
   ]);
 
-  // 1 & 2. Lessons Conducted & Student Attendance KPIs
-  // Attendance = (student attended / jumlah student seharusnya [student_raw]) * 100%
   const scheduleMetrics = useMemo(() => {
     const totalSchedules = filteredSchedules.length;
     const conductedList = filteredSchedules.filter(isLessonConducted);
@@ -950,7 +1079,7 @@ export default function TutorAdmin() {
         ref={fileInputRef}
         type="file"
         accept=".csv,.xlsx,.xls"
-        onChange={handleImportFile}
+        onChange={handleFileInputChange}
         className="hidden"
       />
 
@@ -972,7 +1101,7 @@ export default function TutorAdmin() {
           </Button>
           <Button
             type="button"
-            onClick={handleImportClick}
+            onClick={openChooseFilePage}
             disabled={importing}
             className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
           >
@@ -1444,6 +1573,149 @@ export default function TutorAdmin() {
           )}
         </>
       )}
+
+      {/* Halaman / Dialog Choose File Sebelum Import */}
+      <Dialog
+        open={importModalOpen}
+        onOpenChange={(open) => {
+          if (!importing) {
+            setImportModalOpen(open);
+            if (!open) {
+              setSelectedImportFile(null);
+              setParsedPreviewCount(0);
+              setIsDraggingFile(false);
+            }
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileUp className="w-5 h-5 text-primary" />
+              Import BO Schedule — Choose File
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-1">
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingFile(true);
+              }}
+              onDragLeave={() => setIsDraggingFile(false)}
+              onDrop={async (e) => {
+                e.preventDefault();
+                setIsDraggingFile(false);
+                const dropped = e.dataTransfer.files?.[0];
+                if (dropped) await inspectSelectedFile(dropped);
+              }}
+              className={`border-2 border-dashed rounded-2xl p-6 text-center transition-colors ${
+                isDraggingFile
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border bg-secondary/20 hover:border-primary/50'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto mb-3">
+                <Upload className="w-6 h-6" />
+              </div>
+
+              {!selectedImportFile ? (
+                <>
+                  <div className="text-sm font-semibold text-foreground">
+                    Choose a CSV or Excel file to import
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Drag &amp; drop file here, or click Choose File (.csv, .xlsx, .xls)
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="mt-4 gap-2"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" /> Choose File
+                  </Button>
+                </>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> File ready to import
+                  </div>
+                  <div className="text-sm font-semibold text-foreground break-all">
+                    {selectedImportFile.name}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {(selectedImportFile.size / 1024).toFixed(1)} KB ·{' '}
+                    <strong className="text-foreground">{parsedPreviewCount}</strong> rows detected
+                  </div>
+                  <div className="flex items-center justify-center gap-2 pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={importing}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      Change File
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={importing}
+                      onClick={() => {
+                        setSelectedImportFile(null);
+                        setParsedPreviewCount(0);
+                      }}
+                      className="text-muted-foreground gap-1"
+                    >
+                      <X className="w-3.5 h-3.5" /> Clear
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl bg-secondary/40 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
+              <div className="font-semibold text-foreground">
+                Auto-mapped columns for BoScheduleRecord:
+              </div>
+              <div>
+                <code className="text-foreground">unique_key</code>,{' '}
+                <code className="text-foreground">lesson_datetime</code>,{' '}
+                <code className="text-foreground">lesson_date</code>,{' '}
+                <code className="text-foreground">lesson_time</code>,{' '}
+                <code className="text-foreground">week_label</code>,{' '}
+                <code className="text-foreground">lesson_title</code>, plus attendance &amp; course fields.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={importing}
+                onClick={() => setImportModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!selectedImportFile || importing}
+                onClick={handleConfirmImport}
+                className="gap-2"
+              >
+                {importing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4" />
+                )}
+                {importing ? 'Importing...' : 'Start Import'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(chartModal)} onOpenChange={(open) => !open && setChartModal(null)}>
         <DialogContent className="max-w-2xl">
