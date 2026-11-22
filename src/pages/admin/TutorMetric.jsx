@@ -83,17 +83,14 @@ const isAssignmentCompleted = (assignment) =>
   ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
 
 const parseEnrolledCount = (r) => {
-  const direct = Number(r.students_count);
-  if (!Number.isNaN(direct) && direct > 0) return direct;
-  const rawMatch = String(r.students_raw || '').match(/^(\d+)/);
+  const rawMatch = String(r.students_raw || '').replace(/\u00a0/g, ' ').trim().match(/^(\d+)/);
   if (rawMatch) {
     const parsed = Number(rawMatch[1]);
     if (parsed > 0) return parsed;
   }
-  const attended = Number(r.students_attended) || 0;
-  const pct = Number(r.attendance_pct) || 0;
-  if (attended > 0 && pct > 0) return Math.round((attended * 100) / pct);
-  return attended;
+  const direct = Number(r.students_count);
+  if (!Number.isNaN(direct) && direct > 0) return direct;
+  return 0;
 };
 
 const getPerformanceBadge = (status) => {
@@ -138,7 +135,7 @@ export default function TutorMetric() {
       ] = await Promise.all([
         supabase
           .from('CustomUser')
-          .select('id, full_name, username, role, status, taught_courses')
+          .select('id, full_name, username, role, taught_courses')
           .in('role', ['Tutor', 'Team Leader'])
           .order('full_name', { ascending: true }),
         supabase.from('WeeklyFeedbackAssignment').select('*'),
@@ -170,7 +167,7 @@ export default function TutorMetric() {
         from += step;
       }
 
-      setTutors((userData || []).filter((u) => u.status !== 'Inactive'));
+      setTutors(userData || []);
       setSchedules(allSched);
       setFeedbackAssignments(fbData || []);
       setMeetings(meetData || []);
@@ -210,6 +207,7 @@ export default function TutorMetric() {
       (r) =>
         !r.is_test_group &&
         r.is_conducted &&
+        (Number(r.students_attended) || 0) >= 1 &&
         Number(r.lesson_month) === mNum &&
         Number(r.lesson_year) === yNum
     );
