@@ -107,18 +107,33 @@ const isAssignmentCompleted = (assignment) =>
   assignment.is_done === true ||
   ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
 
-const parseEnrolledCount = (r) => {
+const parseLeadingInt = (val) => {
+  const cleaned = String(val ?? '').replace(/\u00a0/g, ' ').trim();
+  const match = cleaned.match(/^(\d+)/);
+  return match ? Number(match[1]) : 0;
+};
+
+const parsePercentNumber = (val) => {
+  const cleaned = String(val ?? '').replace('%', '').trim();
+  const num = Number(cleaned);
+  return Number.isNaN(num) ? 0 : num;
+};
+
+// Jumlah student seharusnya (dari students_raw / students_count)
+const parseExpectedStudentsCount = (r) => {
+  const rawCount = parseLeadingInt(r.students_raw);
+  if (rawCount > 0) return rawCount;
   const direct = Number(r.students_count);
   if (!Number.isNaN(direct) && direct > 0) return direct;
-  const rawMatch = String(r.students_raw || '').match(/^(\d+)/);
-  if (rawMatch) {
-    const parsed = Number(rawMatch[1]);
-    if (parsed > 0) return parsed;
-  }
+  return 0;
+};
+
+const isLessonConducted = (r) => {
   const attended = Number(r.students_attended) || 0;
-  const pct = Number(r.attendance_pct) || 0;
-  if (attended > 0 && pct > 0) return Math.round((attended * 100) / pct);
-  return attended;
+  if (r.is_conducted === true) return attended >= 1;
+  if (r.is_conducted === false) return false;
+  const pct = parsePercentNumber(r.attendance_pct);
+  return pct > 0 && attended >= 1;
 };
 
 const getWeekBucket = (dateStr) => {
@@ -132,8 +147,8 @@ const getWeekBucket = (dateStr) => {
 
 const getCourseLabel = (r) => {
   const direct =
-    r.course_name ||
     r.course ||
+    r.course_name ||
     r.program_name ||
     r.program ||
     r.subject ||
@@ -141,9 +156,8 @@ const getCourseLabel = (r) => {
     r.course_title;
   if (direct && String(direct).trim()) return String(direct).trim();
 
-  // Fallback ekstraksi dari group_code bila kolom course kosong (misal: "MY 1-1 VP 020" -> "VP")[cite: 7]
-  const code = String(r.group_code || '').trim();
-  const match = code.match(/\b(VP|PS|PP|GDJ|GDS|GD|RB|DL|BW|AI|WEB|PY)\b/i);
+  const label = `${r.group_title || ''} ${r.group_code || ''}`.trim();
+  const match = label.match(/\b(VP|PS|PP|GDJ|GDS|GD|RB|DL|BW|AI|WEB|PY|ME)\b/i);
   if (match) return match[1].toUpperCase();
 
   return 'Uncategorized';
@@ -160,12 +174,14 @@ const normalizeFormat = (raw) => {
 
 const getGroupFormat = (r) => {
   const rawFormat =
+    r.group_type ||
+    r.format ||
     r.group_format ||
     r.course_format ||
     r.class_format ||
-    r.format ||
     r.class_type ||
     r.type ||
+    r.group_title ||
     r.group_code ||
     '';
   return normalizeFormat(rawFormat);
@@ -185,7 +201,14 @@ const parseIsoDate = (rawVal) => {
   if (rawVal instanceof Date && !Number.isNaN(rawVal.getTime())) {
     return rawVal.toISOString().slice(0, 10);
   }
-  const str = String(rawVal).trim();
+  const str = String(rawVal).replace(/\u00a0/g, ' ').trim();
+  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (dotMatch) {
+    const dd = dotMatch[1].padStart(2, '0');
+    const mm = dotMatch[2].padStart(2, '0');
+    const yyyy = dotMatch[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
   if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
   const parsed = new Date(str);
   if (!Number.isNaN(parsed.getTime())) {
@@ -298,8 +321,8 @@ export default function TutorAdmin() {
   const [search, setSearch] = useState('');
   const [showTestGroups, setShowTestGroups] = useState(false);
 
-  const [activeTab, setActiveTab] = useState('summary'); // 'summary' | 'groups' | 'lesson1' | 'log'
-  const [chartModal, setChartModal] = useState(null); // 'conducted' | 'attendance' | 'discipline' | 'qc' | null
+  const [activeTab, setActiveTab] = useState('summary');
+  const [chartModal, setChartModal] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -372,7 +395,13 @@ export default function TutorAdmin() {
 
       const mappedRows = rows
         .map((row) => {
-          const rawDate = pickCell(row, ['lesson_date', 'date', 'Lesson Date', 'Date']);
+          const rawDate = pickCell(row, [
+            'Time of next lesson',
+            'lesson_date',
+            'date',
+            'Lesson Date',
+            'Date',
+          ]);
           const isoDate = parseIsoDate(rawDate);
           const dateParts = isoDate ? isoDate.split('-') : [];
 
@@ -383,58 +412,127 @@ export default function TutorAdmin() {
             Number(pickCell(row, ['lesson_month', 'month', 'Month'])) ||
             (dateParts[1] ? Number(dateParts[1]) : Number(selectedMonth) || 11);
 
-          const groupCode = String(
-            pickCell(row, ['group_code', 'Group Code', 'group', 'Group', 'class_code', 'Class'])
+          const groupTitle = String(
+            pickCell(row, [
+              'Group Title',
+              'group_title',
+              'group_code',
+              'Group Code',
+              'group',
+              'Group',
+              'class_code',
+              'Class',
+            ])
           ).trim();
           const groupId = String(
-            pickCell(row, ['group_id', 'Group ID', 'id', 'ID'])
+            pickCell(row, ['Group ID', 'group_id', 'Group ID', 'id', 'ID'])
           ).trim();
-          const courseName = String(
-            pickCell(row, ['course_name', 'course', 'Course', 'program', 'Program', 'subject'])
+          const courseValue = String(
+            pickCell(row, [
+              'Course',
+              'course',
+              'course_name',
+              'Course Name',
+              'program',
+              'Program',
+              'subject',
+            ])
+          ).trim();
+          const groupTypeValue = String(
+            pickCell(row, ['Group type', 'group_type', 'type', 'Type'])
+          ).trim();
+          const formatValue = String(
+            pickCell(row, ['Format', 'format', 'group_format', 'class_format'])
+          ).trim();
+          const branchValue = String(
+            pickCell(row, ['Branch', 'branch'])
           ).trim();
           const lessonTeacher = String(
-            pickCell(row, ['lesson_teacher', 'teacher', 'Teacher', 'tutor', 'Tutor', 'tutor_name'])
+            pickCell(row, [
+              'Lesson Teacher',
+              'lesson_teacher',
+              'teacher',
+              'Teacher',
+              'tutor',
+              'Tutor',
+              'tutor_name',
+            ])
           ).trim();
 
-          const rawConducted = String(
-            pickCell(row, ['is_conducted', 'conducted', 'Conducted', 'status', 'Status'])
-          )
-            .trim()
-            .toLowerCase();
-          const isConducted =
-            rawConducted === 'true' ||
-            rawConducted === '1' ||
-            rawConducted === 'yes' ||
-            rawConducted === 'conducted' ||
-            rawConducted === 'completed';
+          const rawStatus = pickCell(row, [
+            'S Lesson status',
+            'Lesson status',
+            'is_conducted',
+            'conducted',
+            'Conducted',
+            'status',
+            'Status',
+          ]);
+          const statusPct = parsePercentNumber(rawStatus);
+          const rawConductedStr = String(rawStatus ?? '').trim().toLowerCase();
 
+          const studentsRaw = String(
+            pickCell(row, ['Students', 'students_raw', 'enrolled'])
+          )
+            .replace(/\u00a0/g, ' ')
+            .trim();
+          const expectedStudents = parseLeadingInt(studentsRaw);
           const studentsAttended =
-            Number(pickCell(row, ['students_attended', 'attended', 'Attended', 'present'])) || 0;
-          const studentsCount =
-            Number(pickCell(row, ['students_count', 'enrolled', 'Enrolled', 'total_students'])) || 0;
-          const lessonNumberRaw = pickCell(row, ['lesson_number', 'lesson', 'Lesson', 'lesson_no']);
+            Number(
+              pickCell(row, [
+                ' Students that attended',
+                'Students that attended',
+                'students_attended',
+                'attended',
+                'Attended',
+                'present',
+              ])
+            ) || 0;
+
+          const isConducted =
+            (statusPct > 0 ||
+              rawConductedStr === 'true' ||
+              rawConductedStr === '1' ||
+              rawConductedStr === 'yes' ||
+              rawConductedStr === 'conducted' ||
+              rawConductedStr === 'completed') &&
+            studentsAttended >= 1;
+
+          const lessonNumberRaw = pickCell(row, [
+            ' Next lesson',
+            'Next lesson',
+            'lesson_number',
+            'lesson',
+            'Lesson',
+            'lesson_no',
+          ]);
           const lessonNumber =
             lessonNumberRaw !== '' && !Number.isNaN(Number(lessonNumberRaw))
               ? Number(lessonNumberRaw)
               : null;
 
           const isTestGroup =
-            String(groupCode).toLowerCase().includes('test') ||
+            String(groupTitle).toLowerCase().includes('test') ||
             String(pickCell(row, ['is_test_group', 'test_group'])).toLowerCase() === 'true';
 
-          if (!groupCode && !groupId && !lessonTeacher && !isoDate) return null;
+          if (!groupTitle && !groupId && !lessonTeacher && !isoDate) return null;
 
           return {
             lesson_date: isoDate,
             lesson_year: lessonYear,
             lesson_month: lessonMonth,
-            group_code: groupCode || null,
+            group_title: groupTitle || null,
             group_id: groupId || null,
-            course_name: courseName || null,
+            course: courseValue || null,
+            group_type: groupTypeValue || null,
+            format: formatValue || null,
+            branch: branchValue || null,
             lesson_teacher: lessonTeacher || null,
-            is_conducted: isConducted,
+            attendance_pct: Math.round(statusPct),
+            students_raw: studentsRaw || null,
+            students_count: expectedStudents,
             students_attended: studentsAttended,
-            students_count: studentsCount > 0 ? studentsCount : null,
+            is_conducted: isConducted,
             lesson_number: lessonNumber,
             is_test_group: isTestGroup,
           };
@@ -480,7 +578,6 @@ export default function TutorAdmin() {
     return Array.from(set).sort();
   }, [schedules]);
 
-  // Filter Schedule Records
   const filteredSchedules = useMemo(() => {
     return schedules.filter((r) => {
       if (!showTestGroups && r.is_test_group) return false;
@@ -491,7 +588,7 @@ export default function TutorAdmin() {
       if (selectedTutor !== 'all' && !isSameTutor(r.lesson_teacher, selectedTutor)) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${getCourseLabel(r)}`.toLowerCase();
+        const hay = `${r.group_title || ''} ${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${getCourseLabel(r)}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -508,9 +605,10 @@ export default function TutorAdmin() {
   ]);
 
   // 1 & 2. Lessons Conducted & Student Attendance KPIs
+  // Attendance = (student attended / jumlah student seharusnya [student_raw]) * 100%
   const scheduleMetrics = useMemo(() => {
     const totalSchedules = filteredSchedules.length;
-    const conductedList = filteredSchedules.filter((r) => r.is_conducted);
+    const conductedList = filteredSchedules.filter(isLessonConducted);
     const conductedCount = conductedList.length;
     const completionPct =
       totalSchedules > 0 ? Math.round((conductedCount / totalSchedules) * 100) : 0;
@@ -519,16 +617,15 @@ export default function TutorAdmin() {
       (sum, r) => sum + (Number(r.students_attended) || 0),
       0
     );
-    const totalEnrolled = conductedList.reduce(
-      (sum, r) => sum + parseEnrolledCount(r),
+    const totalExpected = conductedList.reduce(
+      (sum, r) => sum + parseExpectedStudentsCount(r),
       0
     );
     const attendancePct =
-      conductedCount > 0 && totalEnrolled > 0
-        ? Number(((totalAttended / totalEnrolled) * 100).toFixed(1))
+      conductedCount > 0 && totalExpected > 0
+        ? Number(((totalAttended / totalExpected) * 100).toFixed(1))
         : 0;
 
-    // Weekly breakdown (W1 - W4)
     const weeks = ['W1', 'W2', 'W3', 'W4'];
     const weekLabels = {
       W1: 'Week 1 (1–7)',
@@ -543,7 +640,7 @@ export default function TutorAdmin() {
       let indiv = 0;
       let intensive = 0;
       let att = 0;
-      let enr = 0;
+      let exp = 0;
 
       items.forEach((r) => {
         const fmt = getGroupFormat(r);
@@ -551,10 +648,10 @@ export default function TutorAdmin() {
         else if (fmt === 'Individual') indiv += 1;
         else intensive += 1;
         att += Number(r.students_attended) || 0;
-        enr += parseEnrolledCount(r);
+        exp += parseExpectedStudentsCount(r);
       });
 
-      const pct = enr > 0 ? Number(((att / enr) * 100).toFixed(1)) : 0;
+      const pct = exp > 0 ? Number(((att / exp) * 100).toFixed(1)) : 0;
       return {
         week: wk,
         period: weekLabels[wk],
@@ -563,12 +660,11 @@ export default function TutorAdmin() {
         indiv,
         intensive,
         attended: att,
-        enrolled: enr,
+        enrolled: exp,
         avgPct: pct,
       };
     });
 
-    // Active classes & kids per course
     const classMap = new Map();
     const courseMap = new Map();
     let lesson1Count = 0;
@@ -577,22 +673,24 @@ export default function TutorAdmin() {
 
     filteredSchedules.forEach((r) => {
       const cName = getCourseLabel(r);
-      const classKey = r.group_code || r.group_id || `${cName}-${r.lesson_teacher}-${r.id}`;
-      const kids = parseEnrolledCount(r);
+      const classKey = r.group_id || r.group_title || r.group_code || `${cName}-${r.lesson_teacher}-${r.id}`;
+      const kids = parseExpectedStudentsCount(r);
+      const conductedFlag = isLessonConducted(r);
+
       if (!classMap.has(classKey)) {
         classMap.set(classKey, {
           classKey,
-          groupCode: r.group_code || '-',
+          groupCode: r.group_title || r.group_code || '-',
           courseName: cName,
           teacher: r.lesson_teacher || '-',
           format: getGroupFormat(r),
           kids,
-          conducted: r.is_conducted ? 1 : 0,
+          conducted: conductedFlag ? 1 : 0,
         });
       } else {
         const existing = classMap.get(classKey);
         existing.kids = Math.max(existing.kids, kids);
-        if (r.is_conducted) existing.conducted += 1;
+        if (conductedFlag) existing.conducted += 1;
       }
 
       const lNum = Number(r.lesson_number);
@@ -628,7 +726,7 @@ export default function TutorAdmin() {
       conductedCount,
       completionPct,
       totalAttended,
-      totalEnrolled,
+      totalEnrolled: totalExpected,
       attendancePct,
       weeklyBreakdown,
       activeClasses: Array.from(classMap.values()),
@@ -640,7 +738,6 @@ export default function TutorAdmin() {
     };
   }, [filteredSchedules]);
 
-  // 3. Discipline KPI (75% Monthly Feedback + 25% Meeting Presence)
   const disciplineMetrics = useMemo(() => {
     const filteredFb = feedbackAssignments.filter((a) => {
       if (a.is_sample) return false;
@@ -761,7 +858,6 @@ export default function TutorAdmin() {
     selectedTutor,
   ]);
 
-  // 4. QC Result Avg KPI (Period 1 vs Period 2)
   const qcMetrics = useMemo(() => {
     let targetMonth = selectedMonth === 'all' ? null : Number(selectedMonth);
     let targetYear = selectedYear === 'all' ? null : Number(selectedYear);
@@ -995,9 +1091,7 @@ export default function TutorAdmin() {
         </div>
       ) : (
         <>
-          {/* ROW 1: 4 HERO METRIC CARDS SEJAJAR */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {/* 1. Lessons Conducted */}
             <HeroBentoCard
               icon={CalendarCheck}
               iconBg="bg-indigo-600"
@@ -1011,7 +1105,6 @@ export default function TutorAdmin() {
               onViewChart={() => setChartModal('conducted')}
             />
 
-            {/* 2. Student Attendance */}
             <HeroBentoCard
               icon={Percent}
               iconBg="bg-teal-600"
@@ -1025,7 +1118,6 @@ export default function TutorAdmin() {
               onViewChart={() => setChartModal('attendance')}
             />
 
-            {/* 3. Discipline (75% Monthly Feedback + 25% Meeting Presence) */}
             <HeroBentoCard
               icon={ShieldCheck}
               iconBg="bg-violet-600"
@@ -1049,7 +1141,6 @@ export default function TutorAdmin() {
               onViewChart={() => setChartModal('discipline')}
             />
 
-            {/* 4. QC Result Avg (Period 1 vs Period 2) */}
             <HeroBentoCard
               icon={Star}
               iconBg="bg-amber-500"
@@ -1074,7 +1165,6 @@ export default function TutorAdmin() {
             />
           </div>
 
-          {/* ROW 2: 4 SECONDARY CARDS SEJAJAR */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <div
               onClick={() => setActiveTab('groups')}
@@ -1147,7 +1237,6 @@ export default function TutorAdmin() {
             </div>
           </div>
 
-          {/* TABS */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -1195,7 +1284,6 @@ export default function TutorAdmin() {
             </button>
           </div>
 
-          {/* TAB CONTENT */}
           {activeTab === 'summary' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-card border border-border rounded-2xl p-5">
@@ -1313,10 +1401,10 @@ export default function TutorAdmin() {
                     .map((r) => (
                       <tr key={r.id}>
                         <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
-                        <td className="py-2.5 font-medium text-foreground">{r.group_code || '-'}</td>
+                        <td className="py-2.5 font-medium text-foreground">{r.group_title || r.group_code || '-'}</td>
                         <td className="py-2.5 text-muted-foreground">{getCourseLabel(r)}</td>
                         <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
-                        <td className="py-2.5 text-right font-semibold">{parseEnrolledCount(r)}</td>
+                        <td className="py-2.5 text-right font-semibold">{parseExpectedStudentsCount(r)}</td>
                       </tr>
                     ))}
                 </tbody>
@@ -1341,12 +1429,12 @@ export default function TutorAdmin() {
                   {filteredSchedules.slice(0, 200).map((r) => (
                     <tr key={r.id}>
                       <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
-                      <td className="py-2.5 font-medium text-foreground">{r.group_code || '-'}</td>
+                      <td className="py-2.5 font-medium text-foreground">{r.group_title || r.group_code || '-'}</td>
                       <td className="py-2.5 text-muted-foreground">{getCourseLabel(r)}</td>
                       <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
                       <td className="py-2.5 text-center">{r.lesson_number ?? '-'}</td>
                       <td className="py-2.5 text-right font-semibold">
-                        {r.students_attended ?? 0}/{parseEnrolledCount(r)}
+                        {r.students_attended ?? 0}/{parseExpectedStudentsCount(r)}
                       </td>
                     </tr>
                   ))}
@@ -1357,7 +1445,6 @@ export default function TutorAdmin() {
         </>
       )}
 
-      {/* DETAIL CHART DIALOG UNTUK TIAP HERO CARD */}
       <Dialog open={Boolean(chartModal)} onOpenChange={(open) => !open && setChartModal(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
