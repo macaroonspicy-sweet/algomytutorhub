@@ -10,6 +10,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   Activity,
   Users,
   CalendarCheck,
@@ -20,6 +26,8 @@ import {
   FileSpreadsheet,
   Loader2,
   ArrowUpDown,
+  AlertTriangle,
+  Award,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -40,26 +48,37 @@ const MONTHS = [
 
 const FEEDBACK_WEIGHT = 0.75;
 const MEETING_WEIGHT = 0.25;
-
-// Set ke true jika QC score selalu diambil dari bulan sebelumnya
 const USE_PREV_MONTH_FOR_QC = false;
 
-const normalizeName = (name) =>
-  (name || '')
+const getSortedTokens = (name) => {
+  const cleaned = String(name || '')
     .toLowerCase()
-    .replace(/\b(binti|bin|md|mohd|muhammad)\b/g, '')
-    .replace(/[^a-z0-9]/g, '')
-    .trim();
+    .replace(/\b(binti|bin|md|mohd|muhammad)\b/g, ' ');
+  const tokens = cleaned.match(/[a-z0-9]+/g) || [];
+  return tokens.filter((t) => t.length > 1).sort();
+};
 
 const isSameTutor = (a, b) => {
   if (!a || !b) return false;
-  const cleanA = a.toLowerCase().trim();
-  const cleanB = b.toLowerCase().trim();
+  const cleanA = String(a).toLowerCase().trim();
+  const cleanB = String(b).toLowerCase().trim();
   if (cleanA === cleanB) return true;
-  if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
-  const normA = normalizeName(a);
-  const normB = normalizeName(b);
-  return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
+
+  const tokA = getSortedTokens(a);
+  const tokB = getSortedTokens(b);
+  if (tokA.length > 0 && tokB.length > 0 && tokA.join('|') === tokB.join('|')) {
+    return true;
+  }
+
+  const joinedA = tokA.join('');
+  const joinedB = tokB.join('');
+  if (joinedA && joinedB && joinedA === joinedB) return true;
+
+  return (
+    joinedA.length > 4 &&
+    joinedB.length > 4 &&
+    (joinedA.includes(joinedB) || joinedB.includes(joinedA))
+  );
 };
 
 const normalizeAttendanceStatus = (status) => {
@@ -108,9 +127,6 @@ const parsePercentNumber = (val) => {
   return Number.isNaN(num) ? 0 : num;
 };
 
-// Jumlah siswa seharusnya:
-// - Ambil dari students_raw atau students_count jika > 0
-// - Jika terbaca 0 (misal "0(0)" karena expelled) namun ada siswa hadir (attended >= 1), anggap minimal attended (1)
 const parseExpectedStudentsCount = (r) => {
   const rawCount = parseLeadingInt(r.students_raw);
   if (rawCount > 0) return rawCount;
@@ -130,6 +146,14 @@ const isLessonConducted = (r) => {
   if (r.is_conducted === false) return false;
   const pct = parsePercentNumber(r.attendance_pct);
   return pct > 0 && attended >= 1;
+};
+
+const getAttendanceDisciplineAccumulation = (item) => {
+  const parts = [item.attendancePct, item.disciplinePct].filter(
+    (v) => v !== null && v !== undefined && !Number.isNaN(v)
+  );
+  if (parts.length === 0) return null;
+  return Number((parts.reduce((sum, v) => sum + v, 0) / parts.length).toFixed(2));
 };
 
 const getPerformanceStatus = (score) => {
@@ -171,12 +195,15 @@ export default function TutorMetric() {
   const [meetings, setMeetings] = useState([]);
   const [meetingAttendances, setMeetingAttendances] = useState([]);
   const [qcRecords, setQcRecords] = useState([]);
+  const [complaints, setComplaints] = useState([]);
 
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('composite_desc');
+  const [sortBy, setSortBy] = useState('att_disc_desc');
+
+  const [detailModal, setDetailModal] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -216,6 +243,13 @@ export default function TutorMetric() {
       setMeetings(meetRes.data || []);
       setMeetingAttendances(attRes.data || []);
       setQcRecords((qcRes.data || []).filter((q) => !q.is_sample));
+
+      const compRes = await supabase.from('ComplaintReport').select('*');
+      if (!compRes.error && Array.isArray(compRes.data)) {
+        setComplaints(compRes.data);
+      } else {
+        setComplaints([]);
+      }
     } catch (err) {
       toast.error('Failed to load Tutor Metrics', { description: err.message });
     } finally {
@@ -228,13 +262,24 @@ export default function TutorMetric() {
   }, []);
 
   const tutorMetricsList = useMemo(() => {
-    // 1. Kumpulkan daftar unik tutor dari CustomUser + jadwal + feedback + QC
-    const tutorNames = [];
-    const pushUniqueTutor = (rawName) => {
+    const tutorGroups = [];
+
+    const findOrCreateTutorGroup = (rawName) => {
       const trimmed = String(rawName || '').trim();
-      if (!trimmed) return;
-      const exists = tutorNames.some((existing) => isSameTutor(existing, trimmed));
-      if (!exists) tutorNames.push(trimmed);
+      if (!trimmed) return null;
+      const existing = tutorGroups.find((g) => isSameTutor(g.canonicalName, trimmed));
+      if (existing) {
+        if (!existing.aliases.includes(trimmed)) {
+          existing.aliases.push(trimmed);
+        }
+        return existing;
+      }
+      const created = {
+        canonicalName: trimmed,
+        aliases: [trimmed],
+      };
+      tutorGroups.push(created);
+      return created;
     };
 
     users
@@ -242,25 +287,28 @@ export default function TutorMetric() {
         const role = String(u.role || u.user_role || '').toLowerCase();
         return !role || role.includes('tutor') || role.includes('teacher') || role.includes('lead');
       })
-      .forEach((u) => pushUniqueTutor(u.full_name || u.name || u.tutor_name));
+      .forEach((u) => findOrCreateTutorGroup(u.full_name || u.name || u.tutor_name));
 
     schedules.forEach((s) => {
       if (s.is_test_group) return;
       if (selectedYear !== 'all' && String(s.lesson_year) !== selectedYear) return;
       if (selectedMonth !== 'all' && String(s.lesson_month) !== selectedMonth) return;
-      pushUniqueTutor(s.lesson_teacher);
+      findOrCreateTutorGroup(s.lesson_teacher);
     });
 
     feedbackAssignments.forEach((a) => {
       if (a.is_sample) return;
-      pushUniqueTutor(a.tutor_name);
+      findOrCreateTutorGroup(a.tutor_name);
     });
 
     qcRecords.forEach((q) => {
-      pushUniqueTutor(q.tutor_name);
+      findOrCreateTutorGroup(q.tutor_name);
     });
 
-    // 2. Filter jadwal periode aktif
+    complaints.forEach((c) => {
+      findOrCreateTutorGroup(c.tutor_name || c.lesson_teacher || c.teacher_name);
+    });
+
     const periodSchedules = schedules.filter((r) => {
       if (r.is_test_group) return false;
       if (selectedYear !== 'all' && String(r.lesson_year) !== selectedYear) return false;
@@ -268,7 +316,6 @@ export default function TutorMetric() {
       return true;
     });
 
-    // 3. Filter feedback periode aktif
     const periodFeedbacks = feedbackAssignments.filter((a) => {
       if (a.is_sample) return false;
       if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
@@ -281,7 +328,6 @@ export default function TutorMetric() {
       return true;
     });
 
-    // 4. Filter meeting periode aktif
     const validMeetingIds = new Set();
     meetings.forEach((m) => {
       if (!m.meeting_date) return;
@@ -292,7 +338,6 @@ export default function TutorMetric() {
     });
     const periodMeetAtts = meetingAttendances.filter((att) => validMeetingIds.has(att.meeting_id));
 
-    // 5. Filter QC periode aktif
     let qcTargetMonth = selectedMonth === 'all' ? null : Number(selectedMonth);
     let qcTargetYear = selectedYear === 'all' ? null : Number(selectedYear);
     if (USE_PREV_MONTH_FOR_QC && qcTargetMonth !== null && qcTargetYear !== null) {
@@ -309,8 +354,19 @@ export default function TutorMetric() {
       return true;
     });
 
-    return tutorNames.map((tutorName) => {
-      // A. Conducted & Attendance Ratio
+    const periodComplaints = complaints.filter((c) => {
+      const dateRaw = c.complaint_date || c.created_at || c.date || '';
+      if (!dateRaw) return true;
+      const iso = String(dateRaw).slice(0, 10);
+      const [cy, cm] = iso.split('-');
+      if (selectedYear !== 'all' && cy && cy !== selectedYear) return false;
+      if (selectedMonth !== 'all' && cm && String(Number(cm)) !== selectedMonth) return false;
+      return true;
+    });
+
+    return tutorGroups.map((group) => {
+      const tutorName = group.canonicalName;
+
       const tSchedules = periodSchedules.filter((r) => isSameTutor(r.lesson_teacher, tutorName));
       const tConductedList = tSchedules.filter(isLessonConducted);
       const conductedCount = tConductedList.length;
@@ -328,19 +384,27 @@ export default function TutorMetric() {
           ? Number(((totalAttended / totalExpected) * 100).toFixed(1))
           : null;
 
-      // B. Discipline (75% Monthly Feedback + 25% Meeting Presence)
       const tFb = periodFeedbacks.filter((a) => isSameTutor(a.tutor_name, tutorName));
+      const fbDoneCount = tFb.filter((a) => getFeedbackScore(a) > 0).length;
       const fbPct =
         tFb.length > 0
           ? Number((tFb.reduce((s, a) => s + getFeedbackScore(a), 0) / tFb.length).toFixed(1))
           : null;
 
       const tMeet = periodMeetAtts.filter((att) => isSameTutor(att.tutor_name, tutorName));
+      const presentCount = tMeet.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Present'
+      ).length;
+      const excusedCount = tMeet.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+      ).length;
+      const absentCount = Math.max(0, tMeet.length - presentCount - excusedCount);
+
       let meetPct = null;
       if (tMeet.length > 0) {
-        const present = tMeet.filter((r) => normalizeAttendanceStatus(r.status) === 'Present').length;
-        const excused = tMeet.filter((r) => normalizeAttendanceStatus(r.status) === 'Excused').length;
-        meetPct = Number((((present * 1 + excused * 0.75) / tMeet.length) * 100).toFixed(1));
+        meetPct = Number(
+          (((presentCount * 1 + excusedCount * 0.75) / tMeet.length) * 100).toFixed(1)
+        );
       }
 
       let disciplinePct = null;
@@ -352,7 +416,6 @@ export default function TutorMetric() {
         disciplinePct = meetPct;
       }
 
-      // C. Quality (QC Score)
       const tQc = periodQcs.filter((q) => isSameTutor(q.tutor_name, tutorName));
       const qcAvg =
         tQc.length > 0
@@ -363,7 +426,11 @@ export default function TutorMetric() {
             )
           : null;
 
-      // D. Composite Score (rata-rata komponen aktif yang tersedia)
+      const tComplaints = periodComplaints.filter((c) =>
+        isSameTutor(c.tutor_name || c.lesson_teacher || c.teacher_name, tutorName)
+      );
+      const complaintCount = tComplaints.length;
+
       const components = [attendancePct, disciplinePct, qcAvg].filter(
         (v) => v !== null && v !== undefined && !Number.isNaN(v)
       );
@@ -374,22 +441,35 @@ export default function TutorMetric() {
 
       const status = getPerformanceStatus(compositeScore);
 
-      return {
+      const baseItem = {
         tutorName,
+        aliases: group.aliases,
         totalSchedules: tSchedules.length,
         conductedCount,
         totalAttended,
         totalExpected,
         attendancePct,
         fbPct,
+        fbDoneCount,
         fbCount: tFb.length,
         meetPct,
+        presentCount,
+        excusedCount,
+        absentCount,
         meetCount: tMeet.length,
         disciplinePct,
         qcAvg,
         qcCount: tQc.length,
+        qcList: tQc,
+        complaintCount,
+        complaintList: tComplaints,
         compositeScore,
         status,
+      };
+
+      return {
+        ...baseItem,
+        attDiscAccumulation: getAttendanceDisciplineAccumulation(baseItem),
       };
     });
   }, [
@@ -399,6 +479,7 @@ export default function TutorMetric() {
     meetings,
     meetingAttendances,
     qcRecords,
+    complaints,
     selectedMonth,
     selectedYear,
   ]);
@@ -406,22 +487,33 @@ export default function TutorMetric() {
   const filteredAndSortedTutors = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = tutorMetricsList.filter((item) => {
-      // Sembunyikan tutor yang tidak punya aktivitas sama sekali pada filter aktif
       const hasActivity =
-        item.totalSchedules > 0 || item.fbCount > 0 || item.meetCount > 0 || item.qcCount > 0;
+        item.totalSchedules > 0 ||
+        item.fbCount > 0 ||
+        item.meetCount > 0 ||
+        item.qcCount > 0 ||
+        item.complaintCount > 0;
       if (!hasActivity) return false;
 
       if (selectedStatus !== 'all' && item.status.label !== selectedStatus) return false;
-      if (q && !item.tutorName.toLowerCase().includes(q)) return false;
+      if (q) {
+        const hay = `${item.tutorName} ${item.aliases.join(' ')}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
       return true;
     });
 
     return list.sort((a, b) => {
       if (sortBy === 'name_asc') return a.tutorName.localeCompare(b.tutorName);
+      if (sortBy === 'composite_desc') return (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
       if (sortBy === 'attendance_desc') return (b.attendancePct ?? -1) - (a.attendancePct ?? -1);
       if (sortBy === 'discipline_desc') return (b.disciplinePct ?? -1) - (a.disciplinePct ?? -1);
       if (sortBy === 'qc_desc') return (b.qcAvg ?? -1) - (a.qcAvg ?? -1);
+      if (sortBy === 'complaint_desc') return b.complaintCount - a.complaintCount;
       if (sortBy === 'conducted_desc') return b.conductedCount - a.conductedCount;
+      // Default: akumulasi Attendance + Discipline paling tinggi ke paling rendah
+      const diff = (b.attDiscAccumulation ?? -1) - (a.attDiscAccumulation ?? -1);
+      if (diff !== 0) return diff;
       return (b.compositeScore ?? -1) - (a.compositeScore ?? -1);
     });
   }, [tutorMetricsList, search, selectedStatus, sortBy]);
@@ -467,12 +559,14 @@ export default function TutorMetric() {
       const rows = filteredAndSortedTutors.map((t) => ({
         Tutor: t.tutorName,
         Conducted: t.conductedCount,
-        'Attended / Expected': `${t.totalAttended}/${t.totalExpected}`,
+        'Total Schedules': t.totalSchedules,
         'Attendance (%)': t.attendancePct ?? '-',
         'Monthly Feedback (%)': t.fbPct ?? '-',
         'Meeting Presence (%)': t.meetPct ?? '-',
         'Discipline (%)': t.disciplinePct ?? '-',
+        'Att + Disc Accumulation': t.attDiscAccumulation ?? '-',
         'QC Avg': t.qcAvg ?? '-',
+        Complaints: t.complaintCount,
         'Composite Score': t.compositeScore ?? '-',
         Status: t.status.label,
       }));
@@ -484,6 +578,8 @@ export default function TutorMetric() {
     }
   };
 
+  const activeTutor = detailModal?.tutor || null;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -494,7 +590,7 @@ export default function TutorMetric() {
             Tutor Metric
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Composite tutor performance across Student Attendance ratio, Discipline (75% Feedback + 25% Meeting), and QC Evaluation.
+            Sorted highest to lowest by Attendance + Discipline accumulation. Click any metric cell for details.
           </p>
         </div>
 
@@ -549,10 +645,12 @@ export default function TutorMetric() {
               <SelectValue placeholder="Sort By" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="att_disc_desc">Attendance + Discipline (High–Low)</SelectItem>
               <SelectItem value="composite_desc">Composite Score (High–Low)</SelectItem>
               <SelectItem value="attendance_desc">Attendance % (High–Low)</SelectItem>
               <SelectItem value="discipline_desc">Discipline % (High–Low)</SelectItem>
               <SelectItem value="qc_desc">QC Quality (High–Low)</SelectItem>
+              <SelectItem value="complaint_desc">Complaints (High–Low)</SelectItem>
               <SelectItem value="conducted_desc">Conducted Lessons (High–Low)</SelectItem>
               <SelectItem value="name_asc">Tutor Name (A–Z)</SelectItem>
             </SelectContent>
@@ -642,10 +740,10 @@ export default function TutorMetric() {
               <tr className="text-left">
                 <th className="py-3 font-semibold">#</th>
                 <th className="py-3 font-semibold">Tutor Name</th>
-                <th className="py-3 font-semibold text-center">Conducted</th>
-                <th className="py-3 font-semibold text-center">Attendance Ratio</th>
-                <th className="py-3 font-semibold text-center">Discipline (75/25)</th>
-                <th className="py-3 font-semibold text-center">Quality (QC)</th>
+                <th className="py-3 font-semibold text-center">Attendance</th>
+                <th className="py-3 font-semibold text-center">Discipline</th>
+                <th className="py-3 font-semibold text-center">QC</th>
+                <th className="py-3 font-semibold text-center">Complaint</th>
                 <th className="py-3 font-semibold text-center">
                   <span className="inline-flex items-center gap-1">
                     Composite <ArrowUpDown className="w-3 h-3" />
@@ -665,56 +763,71 @@ export default function TutorMetric() {
                 filteredAndSortedTutors.map((t, index) => (
                   <tr key={t.tutorName} className="hover:bg-secondary/30 transition-colors">
                     <td className="py-3 text-muted-foreground font-medium">{index + 1}</td>
-                    <td className="py-3 font-semibold text-foreground">{t.tutorName}</td>
-                    <td className="py-3 text-center">
-                      <span className="font-semibold text-indigo-600">{t.conductedCount}</span>
-                      <span className="text-muted-foreground">/{t.totalSchedules}</span>
-                    </td>
-                    <td className="py-3 text-center">
-                      {t.attendancePct !== null ? (
-                        <div>
-                          <div className="font-bold text-teal-600">{t.attendancePct}%</div>
-                          <div className="text-[10px] text-muted-foreground">
-                            {t.totalAttended}/{t.totalExpected} kids
-                          </div>
+                    <td className="py-3 font-semibold text-foreground">
+                      <div>{t.tutorName}</div>
+                      {t.aliases.length > 1 && (
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          Merged: {t.aliases.filter((a) => a !== t.tutorName).join(', ')}
                         </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
                       )}
                     </td>
+
                     <td className="py-3 text-center">
-                      {t.disciplinePct !== null ? (
-                        <div>
-                          <div className="font-bold text-violet-600">{t.disciplinePct}%</div>
-                          <div className="text-[10px] text-muted-foreground">
-                            FB: {t.fbPct ?? '-'}% · Mt: {t.meetPct ?? '-'}%
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'attendance', tutor: t })}
+                        className="font-bold text-teal-600 hover:underline cursor-pointer"
+                      >
+                        {t.attendancePct !== null ? `${t.attendancePct}%` : '-'}
+                      </button>
                     </td>
+
                     <td className="py-3 text-center">
-                      {t.qcAvg !== null ? (
-                        <div>
-                          <div className="font-bold text-amber-600">{t.qcAvg}</div>
-                          <div className="text-[10px] text-muted-foreground">{t.qcCount} QC</div>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'discipline', tutor: t })}
+                        className="font-bold text-violet-600 hover:underline cursor-pointer"
+                      >
+                        {t.disciplinePct !== null ? `${t.disciplinePct}%` : '-'}
+                      </button>
                     </td>
+
+                    <td className="py-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'qc', tutor: t })}
+                        className="font-bold text-amber-600 hover:underline cursor-pointer"
+                      >
+                        {t.qcAvg !== null ? t.qcAvg : '-'}
+                      </button>
+                    </td>
+
+                    <td className="py-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'complaint', tutor: t })}
+                        className={`font-bold hover:underline cursor-pointer ${
+                          t.complaintCount > 0 ? 'text-rose-600' : 'text-foreground'
+                        }`}
+                      >
+                        {t.complaintCount}
+                      </button>
+                    </td>
+
                     <td className="py-3 text-center">
                       <span className="text-sm font-bold text-foreground">
                         {t.compositeScore !== null ? t.compositeScore : '-'}
                       </span>
                     </td>
+
                     <td className="py-3 text-right">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${t.status.badgeClass}`}
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'status', tutor: t })}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap cursor-pointer hover:opacity-85 ${t.status.badgeClass}`}
                       >
                         {t.status.label}
-                      </span>
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -723,6 +836,208 @@ export default function TutorMetric() {
           </table>
         </div>
       )}
+
+      {/* Detail Modal */}
+      <Dialog
+        open={Boolean(detailModal)}
+        onOpenChange={(open) => !open && setDetailModal(null)}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {detailModal?.type === 'attendance' && <CalendarCheck className="w-5 h-5 text-teal-600" />}
+              {detailModal?.type === 'discipline' && <ShieldCheck className="w-5 h-5 text-violet-600" />}
+              {detailModal?.type === 'qc' && <Star className="w-5 h-5 text-amber-500" />}
+              {detailModal?.type === 'complaint' && <AlertTriangle className="w-5 h-5 text-rose-600" />}
+              {detailModal?.type === 'status' && <Award className="w-5 h-5 text-primary" />}
+              <span>
+                {activeTutor?.tutorName} —{' '}
+                {detailModal?.type === 'attendance' && 'Attendance & Conducted Detail'}
+                {detailModal?.type === 'discipline' && 'Discipline Breakdown'}
+                {detailModal?.type === 'qc' && 'QC Evaluation Detail'}
+                {detailModal?.type === 'complaint' && 'Complaint Detail'}
+                {detailModal?.type === 'status' && 'Performance Status Detail'}
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+
+          {activeTutor && detailModal?.type === 'attendance' && (
+            <div className="space-y-3 text-xs pt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3.5 rounded-xl bg-teal-50 border border-teal-200">
+                  <div className="text-teal-700 font-medium">Attendance Ratio</div>
+                  <div className="text-2xl font-bold text-teal-900 mt-0.5">
+                    {activeTutor.attendancePct !== null ? `${activeTutor.attendancePct}%` : '-'}
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-indigo-50 border border-indigo-200">
+                  <div className="text-indigo-700 font-medium">Conducted Lessons</div>
+                  <div className="text-2xl font-bold text-indigo-900 mt-0.5">
+                    {activeTutor.conductedCount}{' '}
+                    <span className="text-sm font-medium text-indigo-700">
+                      / {activeTutor.totalSchedules} schedules
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="p-3.5 rounded-xl bg-secondary border border-border flex items-center justify-between">
+                <span className="text-muted-foreground font-medium">Kids Attended Ratio</span>
+                <span className="font-bold text-foreground">
+                  {activeTutor.totalAttended} / {activeTutor.totalExpected} kids
+                </span>
+              </div>
+            </div>
+          )}
+
+          {activeTutor && detailModal?.type === 'discipline' && (
+            <div className="space-y-3 text-xs pt-1">
+              <div className="p-3.5 rounded-xl bg-violet-50 border border-violet-200 flex items-center justify-between">
+                <div>
+                  <div className="text-violet-700 font-medium">Combined Discipline (75% FB + 25% Meeting)</div>
+                  <div className="text-[11px] text-violet-600 mt-0.5">
+                    Monthly Feedback &amp; Meeting Presence weighted score
+                  </div>
+                </div>
+                <div className="text-2xl font-bold text-violet-900">
+                  {activeTutor.disciplinePct !== null ? `${activeTutor.disciplinePct}%` : '-'}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3.5 rounded-xl bg-secondary border border-border space-y-1">
+                  <div className="text-muted-foreground font-medium">Monthly Feedback (75%)</div>
+                  <div className="text-xl font-bold text-foreground">
+                    {activeTutor.fbPct !== null ? `${activeTutor.fbPct}%` : '-'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Completed: {activeTutor.fbDoneCount} / {activeTutor.fbCount} assignments
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-secondary border border-border space-y-1">
+                  <div className="text-muted-foreground font-medium">Meeting Presence (25%)</div>
+                  <div className="text-xl font-bold text-foreground">
+                    {activeTutor.meetPct !== null ? `${activeTutor.meetPct}%` : '-'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Present: {activeTutor.presentCount} · Excused: {activeTutor.excusedCount} · Absent: {activeTutor.absentCount}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTutor && detailModal?.type === 'qc' && (
+            <div className="space-y-3 text-xs pt-1">
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
+                <div>
+                  <div className="text-amber-800 font-medium">QC Evaluation Average</div>
+                  <div className="text-[11px] text-amber-700 mt-0.5">
+                    Based on {activeTutor.qcCount} recorded QC evaluations
+                  </div>
+                </div>
+                <div className="text-2xl font-bold text-amber-950">
+                  {activeTutor.qcAvg !== null ? activeTutor.qcAvg : '-'}
+                </div>
+              </div>
+
+              {activeTutor.qcList.length > 0 ? (
+                <div className="max-h-48 overflow-y-auto divide-y divide-border rounded-xl border border-border">
+                  {activeTutor.qcList.map((q, i) => (
+                    <div key={q.id || i} className="p-2.5 flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-foreground">
+                          {q.group_title || q.course || `Evaluation #${i + 1}`}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {q.evaluation_date || `${q.period_month || '-'}/${q.period_year || '-'}`}
+                        </div>
+                      </div>
+                      <span className="font-bold text-amber-700">{q.evaluation_score}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-secondary/40 text-muted-foreground text-center">
+                  No QC records for this period.
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTutor && detailModal?.type === 'complaint' && (
+            <div className="space-y-3 text-xs pt-1">
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between">
+                <div className="text-rose-800 font-medium">Total Complaints in Period</div>
+                <div className="text-2xl font-bold text-rose-900">{activeTutor.complaintCount}</div>
+              </div>
+
+              {activeTutor.complaintList.length > 0 ? (
+                <div className="max-h-48 overflow-y-auto divide-y divide-border rounded-xl border border-border">
+                  {activeTutor.complaintList.map((c, i) => (
+                    <div key={c.id || i} className="p-2.5 space-y-0.5">
+                      <div className="font-semibold text-foreground">
+                        {c.title || c.category || c.reason || `Complaint #${i + 1}`}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {c.notes || c.description || c.status || '-'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-secondary/40 text-muted-foreground text-center">
+                  No complaints recorded for this tutor in the selected period.
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTutor && detailModal?.type === 'status' && (
+            <div className="space-y-3 text-xs pt-1">
+              <div className="p-3.5 rounded-xl bg-secondary border border-border flex items-center justify-between">
+                <div>
+                  <div className="text-muted-foreground font-medium">Composite Score</div>
+                  <div className="text-2xl font-bold text-foreground mt-0.5">
+                    {activeTutor.compositeScore !== null ? activeTutor.compositeScore : '-'}
+                  </div>
+                </div>
+                <span
+                  className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border ${activeTutor.status.badgeClass}`}
+                >
+                  {activeTutor.status.label}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="p-2.5 rounded-xl bg-secondary/50 border border-border">
+                  <div className="text-[11px] text-muted-foreground">Attendance</div>
+                  <div className="font-bold text-teal-600 mt-0.5">
+                    {activeTutor.attendancePct !== null ? `${activeTutor.attendancePct}%` : '-'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-secondary/50 border border-border">
+                  <div className="text-[11px] text-muted-foreground">Discipline</div>
+                  <div className="font-bold text-violet-600 mt-0.5">
+                    {activeTutor.disciplinePct !== null ? `${activeTutor.disciplinePct}%` : '-'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-secondary/50 border border-border">
+                  <div className="text-[11px] text-muted-foreground">QC Avg</div>
+                  <div className="font-bold text-amber-600 mt-0.5">
+                    {activeTutor.qcAvg !== null ? activeTutor.qcAvg : '-'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-secondary/30 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
+                <div className="font-semibold text-foreground">Status Thresholds:</div>
+                <div>High Performer: &ge; 90 · Stable Performer: 80–89.99 · Need Improvement: 70–79.99 · Low Performance: &lt; 70</div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
