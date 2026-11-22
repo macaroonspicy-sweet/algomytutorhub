@@ -228,6 +228,43 @@ const pickCell = (row, keys) => {
   return '';
 };
 
+const resolveLessonTitle = (row, groupTitle = '', lessonNumber = null) => {
+  const rawTitle = String(
+    pickCell(row, [
+      'Next lesson',
+      'next lesson',
+      ' next lesson',
+      'lesson_title',
+      'Lesson Title',
+      'Lesson Topic',
+      'lesson_topic',
+      'Topic',
+      'topic',
+      'Title',
+      'title',
+      'Lesson Name',
+      'lesson_name',
+    ])
+  )
+    .replace(/\u00a0/g, ' ')
+    .trim();
+
+  if (
+    rawTitle &&
+    !['null', 'none', 'nan', 'n/a', '-'].includes(rawTitle.toLowerCase())
+  ) {
+    return rawTitle;
+  }
+
+  const cleanGroup = String(groupTitle || '').trim();
+  if (cleanGroup && lessonNumber) {
+    return `${cleanGroup} — Lesson ${lessonNumber}`;
+  }
+  if (cleanGroup) return cleanGroup;
+  if (lessonNumber) return `Lesson ${lessonNumber}`;
+  return 'Untitled Lesson';
+};
+
 const parseIsoDate = (rawVal) => {
   if (!rawVal) return null;
   if (rawVal instanceof Date && !Number.isNaN(rawVal.getTime())) {
@@ -543,20 +580,22 @@ export default function TutorAdmin() {
           const groupId = String(
             pickCell(row, ['Group ID', 'group_id', 'Group ID', 'id', 'ID'])
           ).trim();
-          const lessonTitle = String(
-            pickCell(row, [
-              'lesson_title',
-              'Lesson Title',
-              'Lesson Topic',
-              'lesson_topic',
-              'Topic',
-              'topic',
-              'Title',
-              'title',
-              'Lesson Name',
-              'lesson_name',
-            ])
-          ).trim();
+
+          const lessonNumberRaw = pickCell(row, [
+            ' Next lesson',
+            'Next lesson',
+            'lesson_number',
+            'lesson',
+            'Lesson',
+            'lesson_no',
+          ]);
+          const lessonNumber =
+            lessonNumberRaw !== '' && !Number.isNaN(Number(lessonNumberRaw))
+              ? Number(lessonNumberRaw)
+              : null;
+
+          const lessonTitle = resolveLessonTitle(row, groupTitle, lessonNumber);
+
           const courseValue = String(
             pickCell(row, [
               'Course',
@@ -631,19 +670,6 @@ export default function TutorAdmin() {
               rawConductedStr === 'completed') &&
             studentsAttended >= 1;
 
-          const lessonNumberRaw = pickCell(row, [
-            ' Next lesson',
-            'Next lesson',
-            'lesson_number',
-            'lesson',
-            'Lesson',
-            'lesson_no',
-          ]);
-          const lessonNumber =
-            lessonNumberRaw !== '' && !Number.isNaN(Number(lessonNumberRaw))
-              ? Number(lessonNumberRaw)
-              : null;
-
           const isTestGroup =
             String(groupTitle).toLowerCase().includes('test') ||
             String(pickCell(row, ['is_test_group', 'test_group'])).toLowerCase() === 'true';
@@ -668,7 +694,7 @@ export default function TutorAdmin() {
             lesson_year: lessonYear,
             week_label: weekLabel,
             lesson_number: lessonNumber,
-            lesson_title: lessonTitle || null,
+            lesson_title: lessonTitle,
             group_id: groupId || null,
             group_title: groupTitle || null,
             attendance_pct: Math.round(statusPct),
@@ -740,7 +766,7 @@ export default function TutorAdmin() {
       if (selectedTutor !== 'all' && !isSameTutor(r.lesson_teacher, selectedTutor)) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.group_title || ''} ${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${getCourseLabel(r)}`.toLowerCase();
+        const hay = `${r.group_title || ''} ${r.group_code || ''} ${r.group_id || ''} ${r.lesson_teacher || ''} ${r.lesson_title || ''} ${getCourseLabel(r)}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1573,6 +1599,7 @@ export default function TutorAdmin() {
                     <th className="py-2.5 font-semibold">Date</th>
                     <th className="py-2.5 font-semibold">Time</th>
                     <th className="py-2.5 font-semibold">Group Code</th>
+                    <th className="py-2.5 font-semibold">Lesson Title</th>
                     <th className="py-2.5 font-semibold">Course</th>
                     <th className="py-2.5 font-semibold">Tutor</th>
                     <th className="py-2.5 font-semibold text-center">Lesson</th>
@@ -1585,6 +1612,7 @@ export default function TutorAdmin() {
                       <td className="py-2.5 text-muted-foreground">{r.lesson_date}</td>
                       <td className="py-2.5 text-muted-foreground">{r.lesson_time || '-'}</td>
                       <td className="py-2.5 font-medium text-foreground">{r.group_title || r.group_code || '-'}</td>
+                      <td className="py-2.5 text-foreground">{r.lesson_title || 'Untitled Lesson'}</td>
                       <td className="py-2.5 text-muted-foreground">{getCourseLabel(r)}</td>
                       <td className="py-2.5 text-foreground">{r.lesson_teacher}</td>
                       <td className="py-2.5 text-center">{r.lesson_number ?? '-'}</td>
@@ -1712,7 +1740,7 @@ export default function TutorAdmin() {
                 <code className="text-foreground">lesson_date</code>,{' '}
                 <code className="text-foreground">lesson_time</code>,{' '}
                 <code className="text-foreground">week_label</code>,{' '}
-                <code className="text-foreground">lesson_title</code>, plus attendance &amp; course fields.
+                <code className="text-foreground">lesson_title</code> (from Next lesson), plus attendance &amp; course fields.
               </div>
             </div>
 
