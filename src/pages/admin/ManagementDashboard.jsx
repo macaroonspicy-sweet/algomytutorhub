@@ -135,15 +135,37 @@ const getWeekBucket = (dateStr) => {
   return 'W4';
 };
 
-const inferCategory = (rawText) => {
+const inferCategoryFromText = (rawText) => {
   const txt = String(rawText || '').toLowerCase();
-  if (txt.includes('design') || txt.includes('gd') || txt.includes('figma') || txt.includes('ui')) {
+  if (
+    txt.includes('design') ||
+    txt.includes('graphic') ||
+    txt.includes('figma') ||
+    txt.includes('ui') ||
+    txt.includes('digital art')
+  ) {
     return 'Design';
   }
-  if (txt.includes('math') || txt.includes('mtk') || txt.includes('bw')) {
+  if (txt.includes('math') || txt.includes('mtk') || txt.includes('bebras')) {
     return 'Math';
   }
   return 'Coding';
+};
+
+const resolveTutorCategory = (tutor, fallbackText = '') => {
+  let coursesStr = '';
+  if (Array.isArray(tutor?.taught_courses)) {
+    coursesStr = tutor.taught_courses
+      .map((c) => (typeof c === 'string' ? c : c?.name || c?.course_name || JSON.stringify(c)))
+      .join(' ');
+  } else if (tutor?.taught_courses && typeof tutor.taught_courses === 'object') {
+    coursesStr = JSON.stringify(tutor.taught_courses);
+  } else if (typeof tutor?.taught_courses === 'string') {
+    coursesStr = tutor.taught_courses;
+  }
+
+  const combined = `${coursesStr} ${fallbackText}`.trim();
+  return inferCategoryFromText(combined);
 };
 
 const formatDeltaPt = (currentVal, prevVal, monthLabel) => {
@@ -188,7 +210,9 @@ function ManagementDashboard() {
       }
 
       const [userRes, fbRes, meetRes, attRes, qcRes, taskRes] = await Promise.all([
-        supabase.from('CustomUser').select('id, full_name, username, role, department, is_active'),
+        supabase
+          .from('CustomUser')
+          .select('id, full_name, username, role, taught_courses, is_active, is_sample'),
         supabase.from('WeeklyFeedbackAssignment').select('*'),
         supabase.from('TutorMeeting').select('*'),
         supabase.from('TutorMeetingAttendance').select('*'),
@@ -197,9 +221,17 @@ function ManagementDashboard() {
       ]);
 
       if (userRes.error) throw userRes.error;
+      if (fbRes.error) throw fbRes.error;
+      if (meetRes.error) throw meetRes.error;
+      if (attRes.error) throw attRes.error;
+      if (qcRes.error) throw qcRes.error;
+
       setTutors(
         (userRes.data || []).filter(
-          (u) => u.is_active !== false && ['Tutor', 'Team Leader'].includes(u.role)
+          (u) =>
+            u.is_active !== false &&
+            !u.is_sample &&
+            ['Tutor', 'Team Leader'].includes(u.role)
         )
       );
       setSchedules(allSchedules);
@@ -228,10 +260,35 @@ function ManagementDashboard() {
       return matchYear(y) && matchMonth(m);
     };
 
+    const tutorCategoryMap = new Map();
+    tutors.forEach((t) => {
+      const tName = t.full_name || t.username || '';
+      const schedSample = schedules
+        .filter((r) => isSameTutor(r.lesson_teacher, tName))
+        .slice(0, 5)
+        .map((r) => `${r.course || ''} ${r.group_title || ''}`)
+        .join(' ');
+      tutorCategoryMap.set(t.id, resolveTutorCategory(t, schedSample));
+    });
+
+    const getCategoryForRecord = (tutorId, tutorName, textHint) => {
+      if (tutorId && tutorCategoryMap.has(tutorId)) return tutorCategoryMap.get(tutorId);
+      const matchedTutor = tutors.find((t) => isSameTutor(t.full_name || t.username, tutorName));
+      if (matchedTutor && tutorCategoryMap.has(matchedTutor.id)) {
+        return tutorCategoryMap.get(matchedTutor.id);
+      }
+      return inferCategoryFromText(textHint);
+    };
+
+    // 1. Schedules (Attendance)
     const periodSchedules = schedules.filter((r) => {
       if (r.is_test_group) return false;
       if (!matchYear(r.lesson_year) || !matchMonth(r.lesson_month)) return false;
-      const cat = inferCategory(`${r.course || ''} ${r.group_title || ''} ${r.lesson_title || ''}`);
+      const cat = getCategoryForRecord(
+        null,
+        r.lesson_teacher,
+        `${r.course || ''} ${r.group_title || ''} ${r.lesson_title || ''}`
+      );
       if (categoryVal !== 'all' && cat !== categoryVal) return false;
       return true;
     });
@@ -257,9 +314,11 @@ function ManagementDashboard() {
       return { week: wk, pct, hasData, attended: att, enrolled: exp };
     });
 
+    // 2. Monthly Meetings
     const periodMeetings = meetings.filter((m) => matchDateYM(m.meeting_date));
     const meetingIds = new Set(periodMeetings.map((m) => m.id));
 
+    // 3. Monthly Feedback (WeeklyFeedbackAssignment)
     const periodFeedback = feedbackAssignments.filter((a) => {
       if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
       if (!isLessonFourMultiple(a)) return false;
@@ -274,55 +333,57 @@ function ManagementDashboard() {
           return false;
         }
       }
-      const cat = inferCategory(`${a.course || ''} ${a.group_title || ''} ${a.notes || ''}`);
+      const cat = getCategoryForRecord(
+        a.tutor_id,
+        a.tutor_name,
+        `${a.course_name || ''} ${a.class_name || ''} ${a.notes || ''}`
+      );
       if (categoryVal !== 'all' && cat !== categoryVal) return false;
       return true;
     });
 
+    // 4. QC Records (QCRecord: period 1 = P1, period 2 = P2)
     const periodQc = qcRecords.filter((q) => {
       if (q.evaluation_score === null || q.evaluation_score === undefined) return false;
-      if (q.period_year !== undefined && q.period_year !== null && !matchYear(q.period_year))
+      if (q.period_year !== undefined && q.period_year !== null && !matchYear(q.period_year)) {
         return false;
-      if (q.period_month !== undefined && q.period_month !== null && !matchMonth(q.period_month))
+      }
+      if (q.period_month !== undefined && q.period_month !== null && !matchMonth(q.period_month)) {
         return false;
+      }
       if (
         (q.period_year === undefined || q.period_year === null) &&
-        q.evaluation_date &&
-        !matchDateYM(q.evaluation_date)
+        q.record_date &&
+        !matchDateYM(q.record_date)
       ) {
         return false;
       }
-      const cat = inferCategory(`${q.course || ''} ${q.group_title || ''} ${q.notes || ''}`);
+      const cat = getCategoryForRecord(q.tutor_id, q.tutor_name, q.notes || '');
       if (categoryVal !== 'all' && cat !== categoryVal) return false;
       return true;
     });
 
+    // 5. Project / Tasks (TutorTask)
     const periodTasks = tasks.filter((t) => {
-      const refDate = t.due_date || t.created_at;
+      const refDate = t.due_date || t.created_date || t.created_at;
       if (refDate && !matchDateYM(refDate)) return false;
-      const cat = inferCategory(`${t.course || ''} ${t.title || ''} ${t.category || ''}`);
+      const cat = getCategoryForRecord(
+        t.tutor_id || t.assignee_id,
+        t.assignee_name || t.tutor_name,
+        `${t.course_name || t.course || ''} ${t.title || ''}`
+      );
       if (categoryVal !== 'all' && cat !== categoryVal) return false;
       return true;
     });
 
     const tutorRoster = tutors.filter((t) => {
-      const cat = inferCategory(`${t.department || ''} ${t.role || ''}`);
-      if (categoryVal !== 'all') {
-        const hasActivityInCat =
-          conductedSchedules.some((r) => isSameTutor(r.lesson_teacher, t.full_name || t.username)) ||
-          periodFeedback.some((a) => isSameTutor(a.tutor_name, t.full_name || t.username)) ||
-          periodQc.some((q) => isSameTutor(q.tutor_name, t.full_name || t.username)) ||
-          periodTasks.some((tk) =>
-            isSameTutor(tk.assignee_name || tk.tutor_name, t.full_name || t.username)
-          );
-        return hasActivityInCat || cat === categoryVal;
-      }
-      return true;
+      if (categoryVal === 'all') return true;
+      return tutorCategoryMap.get(t.id) === categoryVal;
     });
 
     const scorecards = tutorRoster.map((tutor) => {
       const tName = tutor.full_name || tutor.username || 'Unknown';
-      const category = inferCategory(`${tutor.department || ''}`);
+      const category = tutorCategoryMap.get(tutor.id) || 'Coding';
 
       const tSchedules = conductedSchedules.filter((r) => isSameTutor(r.lesson_teacher, tName));
       const tAtt = tSchedules.reduce((s, r) => s + (Number(r.students_attended) || 0), 0);
@@ -356,19 +417,11 @@ function ManagementDashboard() {
           ? Number((discParts.reduce((a, b) => a + b, 0) / discParts.length).toFixed(1))
           : null;
 
-      const tQc = periodQc.filter((q) => isSameTutor(q.tutor_name, tName));
-      const p1Items = tQc.filter((q) => {
-        const p = String(q.period || q.qc_period || '').toLowerCase();
-        if (p.includes('1') && !p.includes('2')) return true;
-        const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 1);
-        return day <= 15;
-      });
-      const p2Items = tQc.filter((q) => {
-        const p = String(q.period || q.qc_period || '').toLowerCase();
-        if (p.includes('2')) return true;
-        const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 16);
-        return day > 15;
-      });
+      const tQc = periodQc.filter(
+        (q) => (q.tutor_id && q.tutor_id === tutor.id) || isSameTutor(q.tutor_name, tName)
+      );
+      const p1Items = tQc.filter((q) => Number(q.period) === 1);
+      const p2Items = tQc.filter((q) => Number(q.period) === 2);
 
       const avgScore = (arr) =>
         arr.length > 0
@@ -381,8 +434,11 @@ function ManagementDashboard() {
       const p1Score = avgScore(p1Items);
       const p2Score = avgScore(p2Items);
 
-      const tTasks = periodTasks.filter((tk) =>
-        isSameTutor(tk.assignee_name || tk.tutor_name, tName)
+      const tTasks = periodTasks.filter(
+        (tk) =>
+          (tk.tutor_id && tk.tutor_id === tutor.id) ||
+          (tk.assignee_id && tk.assignee_id === tutor.id) ||
+          isSameTutor(tk.assignee_name || tk.tutor_name, tName)
       );
       const projectCompletionPct =
         tTasks.length > 0
@@ -447,7 +503,7 @@ function ManagementDashboard() {
           )
         : null;
     const tutorsAttendedMeeting = meetingScorecards.filter((s) => s.meetingsPct > 0).length;
-    const totalMeetingRoster = meetingScorecards.length || periodMeetings.length;
+    const totalMeetingRoster = meetingScorecards.length;
 
     const feedbackScorecards = scorecards.filter((s) => s.feedbackPct !== null);
     const monthlyFeedbackPct =
@@ -478,18 +534,8 @@ function ManagementDashboard() {
           )
         : null;
 
-    const p1All = periodQc.filter((q) => {
-      const p = String(q.period || q.qc_period || '').toLowerCase();
-      if (p.includes('1') && !p.includes('2')) return true;
-      const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 1);
-      return day <= 15;
-    });
-    const p2All = periodQc.filter((q) => {
-      const p = String(q.period || q.qc_period || '').toLowerCase();
-      if (p.includes('2')) return true;
-      const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 16);
-      return day > 15;
-    });
+    const p1All = periodQc.filter((q) => Number(q.period) === 1);
+    const p2All = periodQc.filter((q) => Number(q.period) === 2);
 
     const p1Avg =
       p1All.length > 0
