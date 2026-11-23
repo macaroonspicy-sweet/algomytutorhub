@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
-import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import {
   Users,
@@ -24,8 +23,10 @@ const normalizeKey = (val) =>
     .replace(/\s+/g, ' ');
 
 function Dashboard() {
-  const { user, profile } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [displayName, setDisplayName] = useState('User');
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [currentUserName, setCurrentUserName] = useState('');
   const [users, setUsers] = useState([]);
   const [feedbackRecords, setFeedbackRecords] = useState([]);
   const [monthlyAssignments, setMonthlyAssignments] = useState([]);
@@ -34,17 +35,15 @@ function Dashboard() {
   const [courses, setCourses] = useState([]);
   const [modules, setModules] = useState([]);
 
-  const displayName =
-    profile?.full_name ||
-    user?.user_metadata?.full_name ||
-    profile?.username ||
-    user?.email ||
-    'User';
-
   useEffect(() => {
+    let active = true;
+
     const loadDashboardData = async () => {
       setLoading(true);
       try {
+        const authRes = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
+        const authUser = authRes?.data?.user || null;
+
         const [
           usersRes,
           fbRes,
@@ -71,29 +70,75 @@ function Dashboard() {
         if (coursesRes.error) throw coursesRes.error;
         if (modulesRes.error) throw modulesRes.error;
 
-        setUsers(usersRes.data || []);
-        setFeedbackRecords((fbRes.data || []).filter((r) => !r.is_sample));
-        setMonthlyAssignments((assignRes.data || []).filter((a) => !a.is_sample));
-        setQcRecords((qcRes.data || []).filter((q) => !q.is_sample));
-        setTasks((tasksRes.data || []).filter((t) => !t.is_sample));
-        setCourses((coursesRes.data || []).filter((c) => !c.is_sample));
-        setModules((modulesRes.data || []).filter((m) => !m.is_sample));
+        if (!active) return;
+
+        const allUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
+        setUsers(allUsers);
+
+        const matchedUser =
+          authUser
+            ? allUsers.find(
+                (u) =>
+                  String(u.id) === String(authUser.id) ||
+                  (authUser.email &&
+                    String(u.email || '').toLowerCase() ===
+                      String(authUser.email).toLowerCase())
+              ) || null
+            : null;
+
+        const resolvedName =
+          matchedUser?.full_name ||
+          authUser?.user_metadata?.full_name ||
+          matchedUser?.username ||
+          authUser?.email ||
+          'User';
+
+        setDisplayName(resolvedName);
+        setCurrentUserId(matchedUser?.id || authUser?.id || null);
+        setCurrentUserName(matchedUser?.full_name || authUser?.user_metadata?.full_name || '');
+
+        setFeedbackRecords(
+          (Array.isArray(fbRes.data) ? fbRes.data : []).filter((r) => !r.is_sample)
+        );
+        setMonthlyAssignments(
+          (Array.isArray(assignRes.data) ? assignRes.data : []).filter((a) => !a.is_sample)
+        );
+        setQcRecords(
+          (Array.isArray(qcRes.data) ? qcRes.data : []).filter((q) => !q.is_sample)
+        );
+        setTasks(
+          (Array.isArray(tasksRes.data) ? tasksRes.data : []).filter((t) => !t.is_sample)
+        );
+        setCourses(
+          (Array.isArray(coursesRes.data) ? coursesRes.data : []).filter((c) => !c.is_sample)
+        );
+        setModules(
+          (Array.isArray(modulesRes.data) ? modulesRes.data : []).filter((m) => !m.is_sample)
+        );
       } catch (err) {
-        toast.error('Failed to load Dashboard', { description: err.message });
+        if (active) {
+          toast.error('Failed to load Dashboard', {
+            description: err?.message || 'Unexpected error occurred',
+          });
+        }
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     };
 
     loadDashboardData();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const stats = useMemo(() => {
-    const activeUsers = (users || []).filter(
-      (u) => u.is_active !== false && !u.is_sample
+    const activeUsers = (Array.isArray(users) ? users : []).filter(
+      (u) => u && u.is_active !== false && !u.is_sample
     );
 
-    // Match User List filter for tutors (role === 'Tutor', active, non-sample)
     const rawTutors = activeUsers.filter(
       (u) => String(u.role || '').trim().toLowerCase() === 'tutor'
     );
@@ -111,10 +156,13 @@ function Dashboard() {
     const totalTutors = tutorList.length;
     const totalActiveUsers = activeUsers.length;
 
-    // Feedback analytics
-    const totalFeedbackRecords = feedbackRecords.length;
-    const ratedFeedback = feedbackRecords.filter(
-      (r) => r.rating !== null && r.rating !== undefined && !Number.isNaN(Number(r.rating))
+    const safeFeedback = Array.isArray(feedbackRecords) ? feedbackRecords : [];
+    const totalFeedbackRecords = safeFeedback.length;
+    const ratedFeedback = safeFeedback.filter(
+      (r) =>
+        r.rating !== null &&
+        r.rating !== undefined &&
+        !Number.isNaN(Number(r.rating))
     );
     const avgFeedbackPoint =
       ratedFeedback.length > 0
@@ -126,15 +174,16 @@ function Dashboard() {
           )
         : 4;
 
-    // QC analytics
-    const totalQcRecords = qcRecords.length;
+    const safeQc = Array.isArray(qcRecords) ? qcRecords : [];
+    const totalQcRecords = safeQc.length;
     const now = new Date();
     const curYear = now.getFullYear();
     const curMonth = now.getMonth() + 1;
-    const qcThisMonth = qcRecords.filter((q) => {
+    const qcThisMonth = safeQc.filter((q) => {
       if (q.period_year && q.period_month) {
         return (
-          Number(q.period_year) === curYear && Number(q.period_month) === curMonth
+          Number(q.period_year) === curYear &&
+          Number(q.period_month) === curMonth
         );
       }
       if (!q.record_date) return false;
@@ -146,7 +195,7 @@ function Dashboard() {
       );
     }).length;
 
-    const scoredQc = qcRecords.filter(
+    const scoredQc = safeQc.filter(
       (q) =>
         q.evaluation_score !== null &&
         q.evaluation_score !== undefined &&
@@ -162,8 +211,8 @@ function Dashboard() {
           )
         : null;
 
-    // Discipline summary (75% feedback completion + 25% meeting attendance)
-    const doneAssignments = monthlyAssignments.filter(
+    const safeMonthly = Array.isArray(monthlyAssignments) ? monthlyAssignments : [];
+    const doneAssignments = safeMonthly.filter(
       (a) =>
         a.is_done === true ||
         ['completed', 'done', 'submitted'].includes(
@@ -171,20 +220,19 @@ function Dashboard() {
         )
     ).length;
     const fbPct =
-      monthlyAssignments.length > 0
-        ? Number(((doneAssignments / monthlyAssignments.length) * 100).toFixed(1))
+      safeMonthly.length > 0
+        ? Number(((doneAssignments / safeMonthly.length) * 100).toFixed(1))
         : 0;
     const meetPct = 0;
     const disciplinePct = Number((fbPct * 0.75 + meetPct * 0.25).toFixed(1));
 
-    // Assigned tasks for current user
-    const myTasks = tasks.filter(
+    const safeTasks = Array.isArray(tasks) ? tasks : [];
+    const myTasks = safeTasks.filter(
       (t) =>
-        (user?.id && t.assigned_to === user.id) ||
-        (profile?.id && t.assigned_to === profile.id) ||
-        (profile?.full_name &&
+        (currentUserId && String(t.assigned_to) === String(currentUserId)) ||
+        (currentUserName &&
           String(t.assigned_to_name || '').toLowerCase() ===
-            String(profile.full_name).toLowerCase())
+            String(currentUserName).toLowerCase())
     );
     const openTasks = myTasks.filter(
       (t) => !['completed', 'done'].includes(String(t.status || '').toLowerCase())
@@ -193,13 +241,14 @@ function Dashboard() {
       ['completed', 'done'].includes(String(t.status || '').toLowerCase())
     );
 
-    // Monthly student feedback cards
-    const sortedMonthly = [...monthlyAssignments].sort((a, b) =>
+    const sortedMonthly = [...safeMonthly].sort((a, b) =>
       String(b.created_at || '').localeCompare(String(a.created_at || ''))
     );
 
-    const activeCoursesCount = courses.filter((c) => c.is_active !== false).length;
-    const totalModulesCount = modules.length;
+    const activeCoursesCount = (Array.isArray(courses) ? courses : []).filter(
+      (c) => c.is_active !== false
+    ).length;
+    const totalModulesCount = Array.isArray(modules) ? modules.length : 0;
 
     return {
       totalTutors,
@@ -219,11 +268,21 @@ function Dashboard() {
       activeCoursesCount,
       totalModulesCount,
     };
-  }, [users, feedbackRecords, monthlyAssignments, qcRecords, tasks, courses, modules, user, profile]);
+  }, [
+    users,
+    feedbackRecords,
+    monthlyAssignments,
+    qcRecords,
+    tasks,
+    courses,
+    modules,
+    currentUserId,
+    currentUserName,
+  ]);
 
   const handleRescheduleClick = (item) => {
     toast.info('Reschedule requested', {
-      description: `${item.class_name || item.course_name || 'Assignment'} marked for reschedule review.`,
+      description: `${item?.class_name || item?.course_name || 'Assignment'} marked for reschedule review.`,
     });
   };
 
@@ -237,7 +296,6 @@ function Dashboard() {
 
   return (
     <div className="space-y-6 pb-8">
-      {/* Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -245,7 +303,6 @@ function Dashboard() {
         </p>
       </div>
 
-      {/* Top KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Link
           to="/user-list"
@@ -313,7 +370,6 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* Middle Analytics Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
           <div className="flex items-center gap-2 text-sm font-bold text-foreground">
@@ -375,9 +431,7 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* Bottom Operational Row */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* My Assigned Tasks */}
         <div className="lg:col-span-5 bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm font-bold text-foreground">
@@ -401,9 +455,9 @@ function Dashboard() {
             </div>
           ) : (
             <div className="space-y-2.5">
-              {stats.myTasks.slice(0, 5).map((task) => (
+              {stats.myTasks.slice(0, 5).map((task, idx) => (
                 <div
-                  key={task.id}
+                  key={task.id || idx}
                   className="rounded-xl border border-border bg-secondary/30 p-3 flex items-center justify-between gap-2 text-xs"
                 >
                   <div>
@@ -421,7 +475,6 @@ function Dashboard() {
           )}
         </div>
 
-        {/* My Monthly Student Feedback */}
         <div className="lg:col-span-7 bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm font-bold text-foreground">
@@ -439,7 +492,7 @@ function Dashboard() {
           </div>
 
           <div className="space-y-3">
-            {stats.sortedMonthly.slice(0, 2).map((item) => {
+            {stats.sortedMonthly.slice(0, 2).map((item, idx) => {
               const isDone =
                 item.is_done === true ||
                 ['completed', 'done', 'submitted'].includes(
@@ -448,7 +501,7 @@ function Dashboard() {
 
               return (
                 <div
-                  key={item.id}
+                  key={item.id || idx}
                   className="rounded-xl border border-border bg-card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                 >
                   <div className="space-y-1">
