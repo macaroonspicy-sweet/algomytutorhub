@@ -36,17 +36,6 @@ const normalizeName = (name) =>
    .trim();
 
 
-const normalizeTutorKey = (u) => {
- const email = String(u?.email || '').toLowerCase().trim();
- if (email) return `email:${email}`;
- const username = String(u?.username || '').toLowerCase().trim();
- if (username) return `user:${username}`;
- const normName = normalizeName(u?.full_name || '');
- if (normName) return `name:${normName}`;
- return u?.id ? `id:${String(u.id).trim()}` : '';
-};
-
-
 const isSameTutor = (a, b) => {
  if (!a || !b) return false;
  const cleanA = a.toLowerCase().trim();
@@ -154,50 +143,33 @@ export default function Dashboard() {
      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
 
      const [
-       { data: supaUsers, error: usersErr },
-       { data: supaQc, error: qcErr },
-       { data: supaFb, error: fbErr },
+       { data: supaUsers },
+       qcRecs,
+       fbRecs,
        courses,
        modules,
      ] = await Promise.all([
-       supabase.from('CustomUser').select('id, full_name, username, email, role, is_active, is_sample'),
-       hasPermission('qc_records') ? supabase.from('QCRecord').select('*') : Promise.resolve({ data: [] }),
-       hasPermission('student_feedback') ? supabase.from('FeedbackRecord').select('*') : Promise.resolve({ data: [] }),
+       supabase.from('CustomUser').select('*'),
+       hasPermission('qc_records') ? db.entities.QCRecord.list() : [],
+       hasPermission('student_feedback') ? db.entities.FeedbackRecord.list() : [],
        hasPermission('category_courses') ? db.entities.CourseCategory.list() : [],
        hasPermission('category_module') ? db.entities.ModuleCategory.list() : [],
      ]);
 
-     const rawUsers = !usersErr && Array.isArray(supaUsers) ? supaUsers : await db.entities.CustomUser.list();
-     const qcRecs = (!qcErr && Array.isArray(supaQc) ? supaQc : await db.entities.QCRecord.list()).filter(
-       (q) => q && q.is_sample !== true
-     );
-     const fbRecs = (!fbErr && Array.isArray(supaFb) ? supaFb : await db.entities.FeedbackRecord.list()).filter(
-       (f) => f && f.is_sample !== true
-     );
+     const users = Array.isArray(supaUsers) ? supaUsers : [];
+     const tutors = users.filter(
+       (u) => String(u?.role || '').trim().toLowerCase() === 'tutor'
+     ).length;
 
-     const activeUsers = (Array.isArray(rawUsers) ? rawUsers : []).filter(
-       (u) => u && u.is_active !== false && u.is_sample !== true
-     );
-
-     const seenTutors = new Set();
-     const uniqueTutors = activeUsers.filter((u) => {
-       if (String(u.role || '').trim().toLowerCase() !== 'tutor') return false;
-       const key = normalizeTutorKey(u);
-       if (!key || seenTutors.has(key)) return false;
-       seenTutors.add(key);
-       return true;
-     });
-
-     const tutors = uniqueTutors.length;
      const statsData = {
-       totalUsers: activeUsers.length,
+       totalUsers: users.length,
        tutors,
-       admins: Math.max(0, activeUsers.length - tutors),
+       admins: Math.max(0, users.length - tutors),
        roleCounts: {
-         headOfTutor: activeUsers.filter((u) => u.role === 'Head of Tutor').length,
-         teamLeader: activeUsers.filter((u) => u.role === 'Team Leader').length,
-         qcTeam: activeUsers.filter((u) => u.role === 'QC Team').length,
-         feedbackTeam: activeUsers.filter((u) => u.role === 'Feedback Team').length,
+         headOfTutor: users.filter((u) => u?.role === 'Head of Tutor').length,
+         teamLeader: users.filter((u) => u?.role === 'Team Leader').length,
+         qcTeam: users.filter((u) => u?.role === 'QC Team').length,
+         feedbackTeam: users.filter((u) => u?.role === 'Feedback Team').length,
        },
      };
 
@@ -257,7 +229,7 @@ export default function Dashboard() {
            await Promise.all([
              supabase
                .from('QCRecord')
-               .select('period, period_month, period_year, evaluation_score, record_date, created_date, is_sample'),
+               .select('period_month, period_year, evaluation_score, evaluation_date, created_at, period'),
              supabase.from('WeeklyFeedbackAssignment').select('*'),
              supabase.from('TutorMeeting').select('id, meeting_date'),
              supabase.from('TutorMeetingAttendance').select('meeting_id, status'),
@@ -265,7 +237,7 @@ export default function Dashboard() {
 
 
          const curAssignments = (fbAssignData || []).filter((a) => {
-           if (a.is_sample === true) return false;
+           if (a.is_sample) return false;
            if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
            if (!isLessonFourMultiple(a)) return false;
            if (a.week_start_date) {
@@ -314,22 +286,21 @@ export default function Dashboard() {
 
          const curMonthQcs = (qcData || []).filter(
            (q) =>
-             q.is_sample !== true &&
              q.evaluation_score !== null &&
              q.evaluation_score !== undefined &&
              Number(q.period_month) === curMonth &&
              Number(q.period_year) === curYear
          );
          const p1Qcs = curMonthQcs.filter((q) => {
-           if (Number(q.period) === 1) return true;
-           if (Number(q.period) === 2) return false;
-           const day = Number(String(q.record_date || q.created_date || '').split('-')[2]?.slice(0, 2) || 1);
+           const p = String(q.period || q.qc_period || '').toLowerCase();
+           if (p.includes('1') && !p.includes('2')) return true;
+           const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 1);
            return day <= 15;
          });
          const p2Qcs = curMonthQcs.filter((q) => {
-           if (Number(q.period) === 2) return true;
-           if (Number(q.period) === 1) return false;
-           const day = Number(String(q.record_date || q.created_date || '').split('-')[2]?.slice(0, 2) || 16);
+           const p = String(q.period || q.qc_period || '').toLowerCase();
+           if (p.includes('2')) return true;
+           const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 16);
            return day > 15;
          });
 
@@ -396,7 +367,7 @@ export default function Dashboard() {
 
 
          const myAssignments = (fbAssignData || []).filter((a) => {
-           if (a.is_sample === true) return false;
+           if (a.is_sample) return false;
            if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
            const matchUser = (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName);
            if (!matchUser || !isLessonFourMultiple(a)) return false;
@@ -448,7 +419,7 @@ export default function Dashboard() {
 
 
          const myQcs = (qcData || []).filter((q) => {
-           if (q.is_sample === true || q.evaluation_score === null || q.evaluation_score === undefined) return false;
+           if (q.is_sample || q.evaluation_score === null || q.evaluation_score === undefined) return false;
            const matchUser = (q.tutor_id && q.tutor_id === tId) || isSameTutor(q.tutor_name, tName);
            return matchUser && Number(q.period_month) === prevMonth && Number(q.period_year) === prevYear;
          });
@@ -516,7 +487,7 @@ export default function Dashboard() {
            <StatCard
              label="Total Tutors"
              value={loading ? '...' : stats.tutors || 0}
-             subtext={`${stats.totalUsers || 0} total active users`}
+             subtext={`${stats.totalUsers || 0} total users`}
              icon={Users}
              color="bg-primary"
              glow="glow-purple"
