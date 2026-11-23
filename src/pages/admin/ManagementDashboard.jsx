@@ -45,8 +45,8 @@ const normalizeName = (name) =>
 
 const isSameTutor = (a, b) => {
   if (!a || !b) return false;
-  const cleanA = a.toLowerCase().trim();
-  const cleanB = b.toLowerCase().trim();
+  const cleanA = String(a).toLowerCase().trim();
+  const cleanB = String(b).toLowerCase().trim();
   if (cleanA === cleanB) return true;
   if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
   const normA = normalizeName(a);
@@ -61,26 +61,40 @@ const normalizeAttendanceStatus = (status) => {
   return 'Absent';
 };
 
-const isLessonFourMultiple = (assignment) => {
+const isMonthlyFeedbackAssignment = (assignment) => {
+  if (!assignment) return false;
+  if (String(assignment.status || '').toLowerCase().trim() === 'rescheduled') return false;
+
   if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
     const num = Number(assignment.lesson_number);
     return !Number.isNaN(num) && num > 0 && num % 4 === 0;
   }
+
   const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
   if (match) {
     const num = Number(match[1]);
     return !Number.isNaN(num) && num > 0 && num % 4 === 0;
   }
+
   return true;
 };
 
-const isAssignmentCompleted = (assignment) =>
-  assignment.is_done === true ||
-  ['completed', 'done', 'submitted'].includes(String(assignment.status || '').toLowerCase());
+const getMonthlyFeedbackCompletionRatio = (assignment) => {
+  const isDoneFlag =
+    assignment.is_done === true ||
+    ['completed', 'done', 'submitted'].includes(
+      String(assignment.status || '').toLowerCase().trim()
+    );
 
-const isTaskDone = (task) =>
-  task.is_done === true ||
-  ['completed', 'done', 'submitted', 'approved'].includes(String(task.status || '').toLowerCase());
+  const totalStudents = Number(assignment.student_count) || 0;
+  const completedStudents = Number(assignment.completed_count) || 0;
+
+  if (isDoneFlag) return 1;
+  if (totalStudents > 0 && completedStudents > 0) {
+    return Math.min(1, completedStudents / totalStudents);
+  }
+  return 0;
+};
 
 const parseLeadingInt = (val) => {
   const cleaned = String(val ?? '').replace(/\u00a0/g, ' ').trim();
@@ -185,7 +199,6 @@ function ManagementDashboard() {
   const [meetings, setMeetings] = useState([]);
   const [meetingAttendances, setMeetingAttendances] = useState([]);
   const [qcRecords, setQcRecords] = useState([]);
-  const [tasks, setTasks] = useState([]);
 
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
@@ -209,7 +222,7 @@ function ManagementDashboard() {
         from += step;
       }
 
-      const [userRes, fbRes, meetRes, attRes, qcRes, taskRes] = await Promise.all([
+      const [userRes, fbRes, meetRes, attRes, qcRes] = await Promise.all([
         supabase
           .from('CustomUser')
           .select('id, full_name, username, role, taught_courses, is_active, is_sample'),
@@ -217,7 +230,6 @@ function ManagementDashboard() {
         supabase.from('TutorMeeting').select('*'),
         supabase.from('TutorMeetingAttendance').select('*'),
         supabase.from('QCRecord').select('*'),
-        supabase.from('TutorTask').select('*'),
       ]);
 
       if (userRes.error) throw userRes.error;
@@ -239,7 +251,6 @@ function ManagementDashboard() {
       setMeetings(meetRes.data || []);
       setMeetingAttendances(attRes.data || []);
       setQcRecords((qcRes.data || []).filter((q) => !q.is_sample));
-      setTasks(taskRes.data || []);
     } catch (err) {
       toast.error('Failed to load Management Dashboard', { description: err.message });
     } finally {
@@ -255,9 +266,17 @@ function ManagementDashboard() {
     const matchMonth = (mNum) => monthVal === 'all' || String(Number(mNum)) === String(monthVal);
     const matchYear = (yNum) => yearVal === 'all' || String(yNum) === String(yearVal);
     const matchDateYM = (dateStr) => {
-      if (!dateStr) return monthVal === 'all' && yearVal === 'all';
-      const [y, m] = String(dateStr).split('-');
-      return matchYear(y) && matchMonth(m);
+      if (!dateStr) return true;
+      const str = String(dateStr).trim();
+      const isoMatch = str.match(/^(\d{4})[-/](\d{1,2})/);
+      if (isoMatch) {
+        return matchYear(isoMatch[1]) && matchMonth(isoMatch[2]);
+      }
+      const parsed = new Date(str);
+      if (!Number.isNaN(parsed.getTime())) {
+        return matchYear(parsed.getFullYear()) && matchMonth(parsed.getMonth() + 1);
+      }
+      return true;
     };
 
     const tutorCategoryMap = new Map();
@@ -318,10 +337,9 @@ function ManagementDashboard() {
     const periodMeetings = meetings.filter((m) => matchDateYM(m.meeting_date));
     const meetingIds = new Set(periodMeetings.map((m) => m.id));
 
-    // 3. Monthly Feedback (WeeklyFeedbackAssignment)
-    const periodFeedback = feedbackAssignments.filter((a) => {
-      if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
-      if (!isLessonFourMultiple(a)) return false;
+    // 3. Monthly Feedback (WeeklyFeedbackAssignment - monthly feedback only)
+    const periodMonthlyFeedback = feedbackAssignments.filter((a) => {
+      if (!isMonthlyFeedbackAssignment(a)) return false;
       if (a.week_start_date) {
         if (!matchDateYM(a.week_start_date)) return false;
       } else if (monthVal !== 'all' && a.month) {
@@ -363,18 +381,11 @@ function ManagementDashboard() {
       return true;
     });
 
-    // 5. Project / Tasks (TutorTask)
-    const periodTasks = tasks.filter((t) => {
-      const refDate = t.due_date || t.created_date || t.created_at;
-      if (refDate && !matchDateYM(refDate)) return false;
-      const cat = getCategoryForRecord(
-        t.tutor_id || t.assignee_id,
-        t.assignee_name || t.tutor_name,
-        `${t.course_name || t.course || ''} ${t.title || ''}`
-      );
-      if (categoryVal !== 'all' && cat !== categoryVal) return false;
-      return true;
-    });
+    // 5. Project completion has no database table/records yet
+    const projectCompletionPct = null;
+    const completedTasksCount = null;
+    const dueTasksCount = null;
+    const tutorsBelow80Project = null;
 
     const tutorRoster = tutors.filter((t) => {
       if (categoryVal === 'all') return true;
@@ -402,13 +413,16 @@ function ManagementDashboard() {
         meetingsPct = Number((((p * 1 + e * 0.75) / tMeetAtt.length) * 100).toFixed(1));
       }
 
-      const tFb = periodFeedback.filter(
+      const tMonthlyFb = periodMonthlyFeedback.filter(
         (a) => (a.tutor_id && a.tutor_id === tutor.id) || isSameTutor(a.tutor_name, tName)
       );
       let feedbackPct = null;
-      if (tFb.length > 0) {
-        const done = tFb.filter(isAssignmentCompleted).length;
-        feedbackPct = Number(((done / tFb.length) * 100).toFixed(1));
+      if (tMonthlyFb.length > 0) {
+        const totalRatio = tMonthlyFb.reduce(
+          (sum, item) => sum + getMonthlyFeedbackCompletionRatio(item),
+          0
+        );
+        feedbackPct = Number(((totalRatio / tMonthlyFb.length) * 100).toFixed(1));
       }
 
       const discParts = [meetingsPct, feedbackPct].filter((v) => v !== null);
@@ -434,28 +448,12 @@ function ManagementDashboard() {
       const p1Score = avgScore(p1Items);
       const p2Score = avgScore(p2Items);
 
-      const tTasks = periodTasks.filter(
-        (tk) =>
-          (tk.tutor_id && tk.tutor_id === tutor.id) ||
-          (tk.assignee_id && tk.assignee_id === tutor.id) ||
-          isSameTutor(tk.assignee_name || tk.tutor_name, tName)
-      );
-      const projectCompletionPct =
-        tTasks.length > 0
-          ? Number(((tTasks.filter(isTaskDone).length / tTasks.length) * 100).toFixed(1))
-          : null;
-
-      const qcProjectParts = [qcScore, projectCompletionPct].filter((v) => v !== null);
-      const qcProjectScore =
-        qcProjectParts.length > 0
-          ? Number((qcProjectParts.reduce((a, b) => a + b, 0) / qcProjectParts.length).toFixed(1))
-          : null;
-
-      const overallParts = [disciplinePct, qcProjectScore].filter((v) => v !== null);
+      const tutorProjectCompletionPct = null;
+      const qcProjectScore = qcScore;
       const overallScore =
-        overallParts.length > 0
-          ? Number((overallParts.reduce((a, b) => a + b, 0) / overallParts.length).toFixed(1))
-          : null;
+        disciplinePct !== null && qcProjectScore !== null
+          ? Number(((disciplinePct + qcProjectScore) / 2).toFixed(1))
+          : disciplinePct ?? qcProjectScore ?? null;
 
       let tier = 'no_classes';
       if (tSchedules.length === 0 && overallScore === null) {
@@ -481,7 +479,7 @@ function ManagementDashboard() {
         qcScore,
         p1Score,
         p2Score,
-        projectCompletionPct,
+        projectCompletionPct: tutorProjectCompletionPct,
         qcProjectScore,
         overallScore,
         tier,
@@ -555,20 +553,7 @@ function ManagementDashboard() {
         : 'Not scored';
 
     const tutorsWithNoQc = activeScorecards.filter((s) => s.qcScore === null).length;
-
-    const completedTasksCount = periodTasks.filter(isTaskDone).length;
-    const dueTasksCount = periodTasks.length;
-    const projectCompletionPct =
-      dueTasksCount > 0 ? Number(((completedTasksCount / dueTasksCount) * 100).toFixed(1)) : null;
-    const tutorsBelow80Project = scorecards.filter(
-      (s) => s.projectCompletionPct !== null && s.projectCompletionPct < 80
-    ).length;
-
-    const qcProjParts = [qcAvg, projectCompletionPct].filter((v) => typeof v === 'number');
-    const qcPlusProjectScore =
-      qcProjParts.length > 0
-        ? Number((qcProjParts.reduce((a, b) => a + b, 0) / qcProjParts.length).toFixed(1))
-        : null;
+    const qcPlusProjectScore = qcAvg;
     const tutorsBelow80QcProj = activeScorecards.filter(
       (s) => s.qcProjectScore !== null && s.qcProjectScore < 80
     ).length;
@@ -625,7 +610,6 @@ function ManagementDashboard() {
       meetings,
       meetingAttendances,
       qcRecords,
-      tasks,
       selectedYear,
       selectedMonth,
       selectedCategory,
@@ -656,7 +640,6 @@ function ManagementDashboard() {
     meetings,
     meetingAttendances,
     qcRecords,
-    tasks,
     selectedCategory,
   ]);
 
@@ -1043,17 +1026,19 @@ function ManagementDashboard() {
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Completed</span>
                 <span className="font-bold text-foreground">
-                  {currentSnapshot.completedTasksCount}
+                  {currentSnapshot.completedTasksCount ?? '-'}
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Due</span>
-                <span className="font-bold text-foreground">{currentSnapshot.dueTasksCount}</span>
+                <span className="font-bold text-foreground">
+                  {currentSnapshot.dueTasksCount ?? '-'}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Tutors below 80%</span>
                 <span className="font-bold text-foreground">
-                  {currentSnapshot.tutorsBelow80Project}
+                  {currentSnapshot.tutorsBelow80Project ?? '-'}
                 </span>
               </div>
             </div>
