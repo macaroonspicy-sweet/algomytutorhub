@@ -13,6 +13,7 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import Login from '@/pages/Login';
 import Layout from '@/components/Layout';
 import Dashboard from '@/pages/Dashboard';
+import ManagementDashboard from '@/pages/admin/ManagementDashboard';
 import AdminPage from '@/pages/admin/AdminPage';
 import StudentFeedback from '@/pages/StudentFeedback';
 import WeeklyFeedback from '@/pages/WeeklyFeedback';
@@ -79,6 +80,14 @@ const AuthenticatedApp = () => {
         <Route path="/login" element={<Login />} />
         <Route element={<ProtectedAppLayout />}>
           <Route path="/" element={<RbacRoute rbacKey="dashboard"><Dashboard /></RbacRoute>} />
+          <Route
+            path="/management-dashboard"
+            element={
+              <RbacRoute rbacKey={['task_management', 'qc_records', 'qc_monthly']}>
+                <ManagementDashboard />
+              </RbacRoute>
+            }
+          />
           <Route path="/admin/users" element={<RbacRoute rbacKey="admin_crud"><AdminPage /></RbacRoute>} />
           <Route path="/admin/qc-tutor" element={<RbacRoute rbacKey="qc_records"><QCTutor /></RbacRoute>} />
           <Route path="/admin/qc-monthly" element={<RbacRoute rbacKey="qc_monthly"><QCMonthlyPage /></RbacRoute>} />

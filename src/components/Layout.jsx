@@ -17,12 +17,20 @@ import {
   TrendingUp,
   ExternalLink,
   HelpCircle,
+  Gauge,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import NotificationBell from '@/components/NotificationBell';
 
 const navItems = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/', rbac: 'dashboard' },
+  {
+    key: 'management-dashboard',
+    label: 'Management Dashboard',
+    icon: Gauge,
+    path: '/management-dashboard',
+    rbac: ['task_management', 'qc_records', 'qc_monthly'],
+  },
   { key: 'tutor-admin', label: 'Tutor Administration', icon: BarChart3, path: '/tutor-admin', rbac: 'task_management' },
   {
     key: 'tutor-central',
