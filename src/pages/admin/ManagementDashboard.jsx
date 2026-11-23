@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { FileSpreadsheet, Loader2 } from 'lucide-react';
+import { CalendarDays, FileSpreadsheet, Loader2, X } from 'lucide-react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -203,6 +203,7 @@ function ManagementDashboard() {
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [detailModal, setDetailModal] = useState(null);
 
   const loadAll = async () => {
     setLoading(true);
@@ -335,6 +336,7 @@ function ManagementDashboard() {
 
     // 2. Monthly Meetings
     const periodMeetings = meetings.filter((m) => matchDateYM(m.meeting_date));
+    const meetingMap = new Map(periodMeetings.map((m) => [m.id, m]));
     const meetingIds = new Set(periodMeetings.map((m) => m.id));
 
     // 3. Monthly Feedback (WeeklyFeedbackAssignment - monthly feedback only)
@@ -385,7 +387,7 @@ function ManagementDashboard() {
     const projectCompletionPct = null;
     const completedTasksCount = null;
     const dueTasksCount = null;
-    const tutorsBelow80Project = null;
+    const tutorsBelow70Project = null;
 
     const tutorRoster = tutors.filter((t) => {
       if (categoryVal === 'all') return true;
@@ -406,16 +408,30 @@ function ManagementDashboard() {
           meetingIds.has(att.meeting_id) &&
           (att.tutor_id === tutor.id || isSameTutor(att.tutor_name, tName))
       );
+      const presentCount = tMeetAtt.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Present'
+      ).length;
+      const excusedCount = tMeetAtt.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+      ).length;
+      const absentCount = tMeetAtt.filter(
+        (r) => normalizeAttendanceStatus(r.status) === 'Absent'
+      ).length;
+
       let meetingsPct = null;
       if (tMeetAtt.length > 0) {
-        const p = tMeetAtt.filter((r) => normalizeAttendanceStatus(r.status) === 'Present').length;
-        const e = tMeetAtt.filter((r) => normalizeAttendanceStatus(r.status) === 'Excused').length;
-        meetingsPct = Number((((p * 1 + e * 0.75) / tMeetAtt.length) * 100).toFixed(1));
+        meetingsPct = Number(
+          (((presentCount * 1 + excusedCount * 0.75) / tMeetAtt.length) * 100).toFixed(1)
+        );
       }
 
       const tMonthlyFb = periodMonthlyFeedback.filter(
         (a) => (a.tutor_id && a.tutor_id === tutor.id) || isSameTutor(a.tutor_name, tName)
       );
+      const fbCompletedCount = tMonthlyFb.filter(
+        (item) => getMonthlyFeedbackCompletionRatio(item) >= 1
+      ).length;
+
       let feedbackPct = null;
       if (tMonthlyFb.length > 0) {
         const totalRatio = tMonthlyFb.reduce(
@@ -460,9 +476,9 @@ function ManagementDashboard() {
         tier = 'no_classes';
       } else if ((overallScore ?? 0) >= 90) {
         tier = 'high';
-      } else if ((overallScore ?? 0) >= 82) {
+      } else if ((overallScore ?? 0) >= 80) {
         tier = 'stable';
-      } else if ((overallScore ?? 0) >= 75) {
+      } else if ((overallScore ?? 0) >= 70) {
         tier = 'need_improvement';
       } else {
         tier = 'low';
@@ -473,12 +489,28 @@ function ManagementDashboard() {
         tutor: tName,
         category,
         attendancePct,
+        conductedLessonsCount: tSchedules.length,
+        studentsAttendedCount: tAtt,
+        expectedStudentsCount: tExp,
+        scheduleItems: tSchedules,
         meetingsPct,
+        presentCount,
+        excusedCount,
+        absentCount,
+        meetingItems: tMeetAtt.map((att) => ({
+          ...att,
+          topic: meetingMap.get(att.meeting_id)?.topic || 'Tutor Meeting',
+          meeting_date: meetingMap.get(att.meeting_id)?.meeting_date || '-',
+        })),
         feedbackPct,
+        fbCompletedCount,
+        fbTotalCount: tMonthlyFb.length,
+        feedbackItems: tMonthlyFb,
         disciplinePct,
         qcScore,
         p1Score,
         p2Score,
+        qcItems: tQc,
         projectCompletionPct: tutorProjectCompletionPct,
         qcProjectScore,
         overallScore,
@@ -487,8 +519,8 @@ function ManagementDashboard() {
     });
 
     const activeScorecards = scorecards.filter((s) => s.tier !== 'no_classes');
-    const tutorsBelow90Attendance = activeScorecards.filter(
-      (s) => s.attendancePct !== null && s.attendancePct < 90
+    const tutorsBelow70Attendance = activeScorecards.filter(
+      (s) => s.attendancePct !== null && s.attendancePct < 70
     ).length;
 
     const meetingScorecards = scorecards.filter((s) => s.meetingsPct !== null);
@@ -505,22 +537,27 @@ function ManagementDashboard() {
 
     const feedbackScorecards = scorecards.filter((s) => s.feedbackPct !== null);
     const monthlyFeedbackPct =
-      feedbackScorecards.length > 0
+      periodMonthlyFeedback.length > 0
         ? Number(
             (
-              feedbackScorecards.reduce((a, b) => a + b.feedbackPct, 0) / feedbackScorecards.length
+              (periodMonthlyFeedback.reduce(
+                (sum, item) => sum + getMonthlyFeedbackCompletionRatio(item),
+                0
+              ) /
+                periodMonthlyFeedback.length) *
+              100
             ).toFixed(1)
           )
         : null;
-    const tutorsBelow80Feedback = feedbackScorecards.filter((s) => s.feedbackPct < 80).length;
+    const tutorsBelow70Feedback = feedbackScorecards.filter((s) => s.feedbackPct < 70).length;
 
     const discValues = [monthlyMeetingsPct, monthlyFeedbackPct].filter((v) => v !== null);
     const disciplinePct =
       discValues.length > 0
         ? Number((discValues.reduce((a, b) => a + b, 0) / discValues.length).toFixed(1))
         : null;
-    const tutorsBelow80Discipline = activeScorecards.filter(
-      (s) => s.disciplinePct !== null && s.disciplinePct < 80
+    const tutorsBelow70Discipline = activeScorecards.filter(
+      (s) => s.disciplinePct !== null && s.disciplinePct < 70
     ).length;
 
     const qcAvg =
@@ -554,8 +591,8 @@ function ManagementDashboard() {
 
     const tutorsWithNoQc = activeScorecards.filter((s) => s.qcScore === null).length;
     const qcPlusProjectScore = qcAvg;
-    const tutorsBelow80QcProj = activeScorecards.filter(
-      (s) => s.qcProjectScore !== null && s.qcProjectScore < 80
+    const tutorsBelow70QcProj = activeScorecards.filter(
+      (s) => s.qcProjectScore !== null && s.qcProjectScore < 70
     ).length;
 
     const sortedScorecards = scorecards.sort((a, b) => {
@@ -577,15 +614,15 @@ function ManagementDashboard() {
       overallAttendancePct,
       studentsAttended,
       shouldAttend,
-      tutorsBelow90Attendance,
+      tutorsBelow70Attendance,
       weeklyBars,
       disciplinePct,
       monthlyMeetingsPct,
       tutorsAttendedMeeting,
       totalMeetingRoster,
       monthlyFeedbackPct,
-      tutorsBelow80Feedback,
-      tutorsBelow80Discipline,
+      tutorsBelow70Feedback,
+      tutorsBelow70Discipline,
       qcAvg,
       p1Avg,
       p2Avg,
@@ -593,9 +630,9 @@ function ManagementDashboard() {
       projectCompletionPct,
       completedTasksCount,
       dueTasksCount,
-      tutorsBelow80Project,
+      tutorsBelow70Project,
       qcPlusProjectScore,
-      tutorsBelow80QcProj,
+      tutorsBelow70QcProj,
       scorecards: sortedScorecards,
       tierCounts,
     };
@@ -709,6 +746,280 @@ function ManagementDashboard() {
     prevSnapshot?.projectCompletionPct ?? null,
     prevMonthInfo?.shortLabel || 'Prev'
   );
+
+  const renderModalContent = () => {
+    if (!detailModal) return null;
+    const { row, metricKey } = detailModal;
+
+    if (metricKey === 'attendance') {
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Attendance Ratio</div>
+              <div className="text-2xl font-bold text-primary mt-1">
+                {row.attendancePct !== null ? `${row.attendancePct}%` : '-'}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Conducted Lessons</div>
+              <div className="text-2xl font-bold text-primary mt-1">
+                {row.conductedLessonsCount}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Total Students</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {row.studentsAttendedCount}/{row.expectedStudentsCount}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">kids attended</div>
+            </div>
+          </div>
+          {row.scheduleItems.length > 0 && (
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-border divide-y divide-border text-xs">
+              {row.scheduleItems.map((item, idx) => (
+                <div key={item.id || idx} className="flex items-center justify-between px-3 py-2">
+                  <div>
+                    <div className="font-medium text-foreground">
+                      {item.group_title || item.course || 'Class Session'}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {item.lesson_date || '-'} • {item.lesson_title || item.course || '-'}
+                    </div>
+                  </div>
+                  <div className="font-semibold text-foreground">
+                    {item.students_attended ?? 0}/{parseExpectedStudentsCount(item)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (metricKey === 'meetings') {
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Meetings Score</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {row.meetingsPct !== null ? `${row.meetingsPct}%` : '-'}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Present / Excused</div>
+              <div className="text-2xl font-bold text-primary mt-1">
+                {row.presentCount} / {row.excusedCount}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Absent / Total</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {row.absentCount} / {row.meetingItems.length}
+              </div>
+            </div>
+          </div>
+          {row.meetingItems.length > 0 ? (
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-border divide-y divide-border text-xs">
+              {row.meetingItems.map((m, idx) => (
+                <div key={m.id || idx} className="flex items-center justify-between px-3 py-2">
+                  <div>
+                    <div className="font-medium text-foreground">{m.topic}</div>
+                    <div className="text-[11px] text-muted-foreground">{m.meeting_date}</div>
+                  </div>
+                  <span className="font-semibold text-foreground">
+                    {normalizeAttendanceStatus(m.status)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-2">
+              No meeting attendance records for this period.
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    if (metricKey === 'feedback') {
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Monthly Feedback</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {row.feedbackPct !== null ? `${row.feedbackPct}%` : '-'}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Completed</div>
+              <div className="text-2xl font-bold text-primary mt-1">{row.fbCompletedCount}</div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">Total Assignments</div>
+              <div className="text-2xl font-bold text-foreground mt-1">{row.fbTotalCount}</div>
+            </div>
+          </div>
+          {row.feedbackItems.length > 0 ? (
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-border divide-y divide-border text-xs">
+              {row.feedbackItems.map((fb, idx) => {
+                const done = getMonthlyFeedbackCompletionRatio(fb) >= 1;
+                return (
+                  <div key={fb.id || idx} className="flex items-center justify-between px-3 py-2">
+                    <div>
+                      <div className="font-medium text-foreground">
+                        {fb.class_name || fb.student_name || fb.course_name || 'Monthly Feedback'}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {fb.course_name || '-'} • Lesson {fb.lesson_number || '-'}
+                      </div>
+                    </div>
+                    <span
+                      className={`font-semibold ${
+                        done ? 'text-emerald-600' : 'text-amber-600'
+                      }`}
+                    >
+                      {done ? 'Completed' : fb.status || 'Pending'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-2">
+              No monthly feedback assignments for this period.
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    if (metricKey === 'discipline') {
+      return (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+            <div className="text-[11px] text-muted-foreground">Discipline</div>
+            <div className="text-2xl font-bold text-foreground mt-1">
+              {row.disciplinePct !== null ? `${row.disciplinePct}%` : '-'}
+            </div>
+          </div>
+          <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+            <div className="text-[11px] text-muted-foreground">Meetings (50%)</div>
+            <div className="text-2xl font-bold text-primary mt-1">
+              {row.meetingsPct !== null ? `${row.meetingsPct}%` : '-'}
+            </div>
+          </div>
+          <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+            <div className="text-[11px] text-muted-foreground">Feedback (50%)</div>
+            <div className="text-2xl font-bold text-foreground mt-1">
+              {row.feedbackPct !== null ? `${row.feedbackPct}%` : '-'}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (metricKey === 'qc') {
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">QC Average</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {row.qcScore !== null ? row.qcScore : '-'}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">P1 Score</div>
+              <div className="text-2xl font-bold text-primary mt-1">
+                {row.p1Score !== null ? row.p1Score : '-'}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+              <div className="text-[11px] text-muted-foreground">P2 Score</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {row.p2Score !== null ? row.p2Score : '-'}
+              </div>
+            </div>
+          </div>
+          {row.qcItems.length > 0 ? (
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-border divide-y divide-border text-xs">
+              {row.qcItems.map((q, idx) => (
+                <div key={q.id || idx} className="flex items-center justify-between px-3 py-2">
+                  <div>
+                    <div className="font-medium text-foreground">
+                      Period {q.period || '-'} • {q.record_date || '-'}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {q.notes || q.auto_generated_notes || 'QC Evaluation'}
+                    </div>
+                  </div>
+                  <span className="font-bold text-foreground">{q.evaluation_score}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-2">
+              No QC evaluations recorded for this period.
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    if (metricKey === 'project') {
+      return (
+        <div className="rounded-xl border border-border bg-secondary/40 p-4 text-center space-y-1">
+          <div className="text-sm font-semibold text-foreground">Project completion</div>
+          <p className="text-xs text-muted-foreground">
+            No project completion data is available yet for {row.tutor}.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+          <div className="text-[11px] text-muted-foreground">Discipline</div>
+          <div className="text-2xl font-bold text-foreground mt-1">
+            {row.disciplinePct !== null ? `${row.disciplinePct}%` : '-'}
+          </div>
+        </div>
+        <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+          <div className="text-[11px] text-muted-foreground">QC + Project</div>
+          <div className="text-2xl font-bold text-primary mt-1">
+            {row.qcProjectScore !== null ? row.qcProjectScore : '-'}
+          </div>
+        </div>
+        <div className="rounded-xl border border-border bg-secondary/40 p-3.5 text-center">
+          <div className="text-[11px] text-muted-foreground">Overall</div>
+          <div className="text-2xl font-bold text-foreground mt-1">
+            {row.overallScore !== null ? row.overallScore : '-'}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const modalTitleMap = {
+    attendance: 'Attendance Detail',
+    meetings: 'Meetings Detail',
+    feedback: 'Monthly Feedback Detail',
+    discipline: 'Discipline Detail',
+    qc: 'QC Evaluation Detail',
+    project: 'Project Completion Detail',
+    qcProject: 'QC + Project Detail',
+    overall: 'Overall Score Detail',
+  };
+
+  const below70Class = (val) => {
+    if (val === null || val === undefined) return 'text-muted-foreground';
+    return Number(val) < 70 ? 'text-rose-600 font-semibold' : 'text-foreground';
+  };
 
   return (
     <div className="space-y-6 pb-8">
@@ -874,9 +1185,9 @@ function ManagementDashboard() {
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-muted-foreground">Tutors below 90%</div>
+              <div className="text-[11px] text-muted-foreground">Tutors below 70%</div>
               <div className="text-lg font-bold text-foreground mt-0.5">
-                {currentSnapshot.tutorsBelow90Attendance}
+                {currentSnapshot.tutorsBelow70Attendance}
               </div>
             </div>
           </div>
@@ -926,18 +1237,18 @@ function ManagementDashboard() {
                 </div>
               </div>
               <div className="flex items-center justify-between pt-3 mt-3 border-t border-border text-[11px]">
-                <span className="text-muted-foreground">Tutors below 80%</span>
+                <span className="text-muted-foreground">Tutors below 70%</span>
                 <span className="font-bold text-foreground">
-                  {currentSnapshot.tutorsBelow80Feedback}
+                  {currentSnapshot.tutorsBelow70Feedback}
                 </span>
               </div>
             </div>
           </div>
 
           <div className="flex items-center justify-between pt-2 border-t border-border text-xs">
-            <span className="text-muted-foreground">Tutors below 80% discipline</span>
+            <span className="text-muted-foreground">Tutors below 70% discipline</span>
             <span className="font-bold text-foreground">
-              {currentSnapshot.tutorsBelow80Discipline}
+              {currentSnapshot.tutorsBelow70Discipline}
             </span>
           </div>
         </div>
@@ -1036,9 +1347,9 @@ function ManagementDashboard() {
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Tutors below 80%</span>
+                <span className="text-muted-foreground">Tutors below 70%</span>
                 <span className="font-bold text-foreground">
-                  {currentSnapshot.tutorsBelow80Project ?? '-'}
+                  {currentSnapshot.tutorsBelow70Project ?? '-'}
                 </span>
               </div>
             </div>
@@ -1046,8 +1357,8 @@ function ManagementDashboard() {
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-border text-xs">
-          <span className="text-muted-foreground">Tutors below 80</span>
-          <span className="font-bold text-foreground">{currentSnapshot.tutorsBelow80QcProj}</span>
+          <span className="text-muted-foreground">Tutors below 70</span>
+          <span className="font-bold text-foreground">{currentSnapshot.tutorsBelow70QcProj}</span>
         </div>
       </div>
 
@@ -1056,7 +1367,9 @@ function ManagementDashboard() {
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-foreground">Tutor scorecard</h2>
-            <p className="text-xs text-rose-500 mt-0.5">Red = below target</p>
+            <p className="text-xs text-rose-500 mt-0.5">
+              Red = below 70 • Click any metric cell for detail
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium">
@@ -1123,100 +1436,147 @@ function ManagementDashboard() {
                   </td>
                 </tr>
               ) : (
-                currentSnapshot.scorecards.map((row) => {
-                  const pctClass = (val, target = 80) => {
-                    if (val === null || val === undefined) return 'text-muted-foreground';
-                    return val < target ? 'text-rose-600 font-semibold' : 'text-foreground';
-                  };
-                  const numClass = (val, target = 80) => {
-                    if (val === null || val === undefined) return 'text-muted-foreground';
-                    return val < target ? 'text-rose-600 font-semibold' : 'text-foreground';
-                  };
-
-                  return (
-                    <tr key={row.id} className="hover:bg-secondary/30 transition-colors">
-                      <td className="py-3 pr-3 font-medium text-foreground whitespace-nowrap">
-                        {row.tutor}
-                      </td>
-                      <td className="py-3 px-2 text-muted-foreground whitespace-nowrap">
-                        {row.category}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right font-semibold whitespace-nowrap ${
-                          row.attendancePct !== null && row.attendancePct < 90
+                currentSnapshot.scorecards.map((row) => (
+                  <tr key={row.id} className="hover:bg-secondary/30 transition-colors">
+                    <td className="py-3 pr-3 font-medium text-foreground whitespace-nowrap">
+                      {row.tutor}
+                    </td>
+                    <td className="py-3 px-2 text-muted-foreground whitespace-nowrap">
+                      {row.category}
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'attendance' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-primary/10 transition-colors font-semibold ${
+                          row.attendancePct !== null && Number(row.attendancePct) < 70
                             ? 'text-rose-600'
                             : 'text-primary'
                         }`}
                       >
                         {row.attendancePct !== null ? `${row.attendancePct}%` : '-'}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right whitespace-nowrap ${pctClass(
-                          row.meetingsPct,
-                          80
+                      </button>
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'meetings' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors ${below70Class(
+                          row.meetingsPct
                         )}`}
                       >
                         {row.meetingsPct !== null ? `${row.meetingsPct}%` : '-'}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right whitespace-nowrap ${pctClass(
-                          row.feedbackPct,
-                          80
+                      </button>
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'feedback' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors ${below70Class(
+                          row.feedbackPct
                         )}`}
                       >
                         {row.feedbackPct !== null ? `${row.feedbackPct}%` : '-'}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right font-medium whitespace-nowrap ${pctClass(
-                          row.disciplinePct,
-                          80
+                      </button>
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'discipline' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors font-medium ${below70Class(
+                          row.disciplinePct
                         )}`}
                       >
                         {row.disciplinePct !== null ? `${row.disciplinePct}%` : '-'}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right whitespace-nowrap ${numClass(
-                          row.qcScore,
-                          80
+                      </button>
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'qc' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors ${below70Class(
+                          row.qcScore
                         )}`}
                       >
                         {row.qcScore !== null ? row.qcScore : '-'}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right whitespace-nowrap ${pctClass(
-                          row.projectCompletionPct,
-                          80
+                      </button>
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'project' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors ${below70Class(
+                          row.projectCompletionPct
                         )}`}
                       >
                         {row.projectCompletionPct !== null ? `${row.projectCompletionPct}%` : '-'}
-                      </td>
-                      <td
-                        className={`py-3 px-2 text-right whitespace-nowrap ${numClass(
-                          row.qcProjectScore,
-                          80
+                      </button>
+                    </td>
+                    <td className="py-3 px-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'qcProject' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors ${below70Class(
+                          row.qcProjectScore
                         )}`}
                       >
                         {row.qcProjectScore !== null ? row.qcProjectScore : '-'}
-                      </td>
-                      <td
-                        className={`py-3 pl-2 text-right font-bold whitespace-nowrap ${
+                      </button>
+                    </td>
+                    <td className="py-3 pl-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setDetailModal({ row, metricKey: 'overall' })}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 hover:bg-secondary transition-colors font-bold ${
                           row.overallScore === null
                             ? 'text-muted-foreground'
-                            : row.overallScore < 80
+                            : Number(row.overallScore) < 70
                             ? 'text-rose-600'
                             : 'text-foreground'
                         }`}
                       >
                         {row.overallScore !== null ? row.overallScore : '-'}
-                      </td>
-                    </tr>
-                  );
-                })
+                      </button>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Drill-Down Detail Modal */}
+      {detailModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setDetailModal(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-border bg-card p-5 shadow-xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-bold text-foreground">
+                <CalendarDays className="w-4 h-4 text-primary" />
+                <span>
+                  {detailModal.row.tutor} — {modalTitleMap[detailModal.metricKey]}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailModal(null)}
+                className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                aria-label="Close detail modal"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {renderModalContent()}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
