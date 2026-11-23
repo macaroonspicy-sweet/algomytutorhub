@@ -93,7 +93,7 @@ function Dashboard() {
       (u) => u.is_active !== false && !u.is_sample
     );
 
-    // Match User List tutor filter: active non-sample users with role 'Tutor'
+    // Match User List filter for tutors (role === 'Tutor', active, non-sample)
     const rawTutors = activeUsers.filter(
       (u) => String(u.role || '').trim().toLowerCase() === 'tutor'
     );
@@ -212,6 +212,7 @@ function Dashboard() {
       fbPct,
       meetPct,
       disciplinePct,
+      myTasks,
       openTasks,
       completedTasks,
       sortedMonthly,
@@ -393,14 +394,14 @@ function Dashboard() {
             </div>
           </div>
 
-          {myTasks.length === 0 ? (
+          {stats.myTasks.length === 0 ? (
             <div className="py-10 text-center text-xs text-muted-foreground">
               No tasks assigned yet. Tasks assigned by your Team Leader will appear here
               automatically.
             </div>
           ) : (
             <div className="space-y-2.5">
-              {myTasks.slice(0, 5).map((task) => (
+              {stats.myTasks.slice(0, 5).map((task) => (
                 <div
                   key={task.id}
                   className="rounded-xl border border-border bg-secondary/30 p-3 flex items-center justify-between gap-2 text-xs"
