@@ -1,580 +1,817 @@
-import React, { useEffect, useMemo, useState } from 'react';
+const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
+
+
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
-import { Button } from '@/components/ui/button';
+import { useAppAuth } from '@/lib/AppAuthContext';
 import {
-  Users,
-  ShieldCheck,
-  Award,
-  MessageSquareText,
-  ClipboardList,
-  BookOpen,
-  Play,
-  CalendarClock,
-  CheckCircle2,
-  Loader2,
+ Users,
+ Star,
+ MessageSquare,
+ CheckSquare,
+ TrendingUp,
+ BookOpen,
+ Award,
+ FileText,
+ Calendar,
+ CalendarCheck,
+ ShieldCheck,
+ ArrowRight,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import TutorTasksPanel from '@/components/tasks/TutorTasksPanel';
+import MyWeeklyFeedbackPanel from '@/components/weekly-feedback/MyWeeklyFeedbackPanel';
+import QCSubmissionPanel from '@/components/qc/QCSubmissionPanel';
 
-const normalizeKey = (val) =>
-  String(val || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ');
 
-function Dashboard() {
-  const [loading, setLoading] = useState(true);
-  const [displayName, setDisplayName] = useState('User');
-  const [currentUserId, setCurrentUserId] = useState(null);
-  const [currentUserName, setCurrentUserName] = useState('');
-  const [users, setUsers] = useState([]);
-  const [feedbackRecords, setFeedbackRecords] = useState([]);
-  const [monthlyAssignments, setMonthlyAssignments] = useState([]);
-  const [qcRecords, setQcRecords] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [courses, setCourses] = useState([]);
-  const [modules, setModules] = useState([]);
+const FEEDBACK_WEIGHT = 0.75;
+const MEETING_WEIGHT = 0.25;
 
-  useEffect(() => {
-    let active = true;
 
-    const loadDashboardData = async () => {
-      setLoading(true);
-      try {
-        const authRes = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
-        const authUser = authRes?.data?.user || null;
+const normalizeName = (name) =>
+ (name || '')
+   .toLowerCase()
+   .replace(/\b(binti|bin|md|mohd|muhammad)\b/g, '')
+   .replace(/[^a-z0-9]/g, '')
+   .trim();
 
-        const [
-          usersRes,
-          fbRes,
-          assignRes,
-          qcRes,
-          tasksRes,
-          coursesRes,
-          modulesRes,
-        ] = await Promise.all([
-          supabase.from('CustomUser').select('*'),
-          supabase.from('FeedbackRecord').select('*'),
-          supabase.from('WeeklyFeedbackAssignment').select('*'),
-          supabase.from('QCRecord').select('*'),
-          supabase.from('TutorTask').select('*'),
-          supabase.from('CourseCategory').select('*'),
-          supabase.from('ModuleCategory').select('*'),
-        ]);
 
-        if (usersRes.error) throw usersRes.error;
-        if (fbRes.error) throw fbRes.error;
-        if (assignRes.error) throw assignRes.error;
-        if (qcRes.error) throw qcRes.error;
-        if (tasksRes.error) throw tasksRes.error;
-        if (coursesRes.error) throw coursesRes.error;
-        if (modulesRes.error) throw modulesRes.error;
+const isSameTutor = (a, b) => {
+ if (!a || !b) return false;
+ const cleanA = a.toLowerCase().trim();
+ const cleanB = b.toLowerCase().trim();
+ if (cleanA === cleanB) return true;
+ if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
+ const normA = normalizeName(a);
+ const normB = normalizeName(b);
+ return normA.length > 4 && normB.length > 4 && (normA.includes(normB) || normB.includes(normA));
+};
 
-        if (!active) return;
 
-        const allUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
-        setUsers(allUsers);
+const normalizeAttendanceStatus = (status) => {
+ const val = String(status || '').trim().toLowerCase();
+ if (val === 'present') return 'Present';
+ if (val === 'excused') return 'Excused';
+ return 'Absent';
+};
 
-        const matchedUser =
-          authUser
-            ? allUsers.find(
-                (u) =>
-                  String(u.id) === String(authUser.id) ||
-                  (authUser.email &&
-                    String(u.email || '').toLowerCase() ===
-                      String(authUser.email).toLowerCase())
-              ) || null
-            : null;
 
-        const resolvedName =
-          matchedUser?.full_name ||
-          authUser?.user_metadata?.full_name ||
-          matchedUser?.username ||
-          authUser?.email ||
-          'User';
+const isLessonFourMultiple = (assignment) => {
+ if (assignment.lesson_number !== null && assignment.lesson_number !== undefined) {
+   const num = Number(assignment.lesson_number);
+   return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+ }
+ const match = String(assignment.notes || '').match(/lesson\s*(\d+)/i);
+ if (match) {
+   const num = Number(match[1]);
+   return !Number.isNaN(num) && num > 0 && num % 4 === 0;
+ }
+ return true;
+};
 
-        setDisplayName(resolvedName);
-        setCurrentUserId(matchedUser?.id || authUser?.id || null);
-        setCurrentUserName(matchedUser?.full_name || authUser?.user_metadata?.full_name || '');
 
-        setFeedbackRecords(
-          (Array.isArray(fbRes.data) ? fbRes.data : []).filter((r) => !r.is_sample)
-        );
-        setMonthlyAssignments(
-          (Array.isArray(assignRes.data) ? assignRes.data : []).filter((a) => !a.is_sample)
-        );
-        setQcRecords(
-          (Array.isArray(qcRes.data) ? qcRes.data : []).filter((q) => !q.is_sample)
-        );
-        setTasks(
-          (Array.isArray(tasksRes.data) ? tasksRes.data : []).filter((t) => !t.is_sample)
-        );
-        setCourses(
-          (Array.isArray(coursesRes.data) ? coursesRes.data : []).filter((c) => !c.is_sample)
-        );
-        setModules(
-          (Array.isArray(modulesRes.data) ? modulesRes.data : []).filter((m) => !m.is_sample)
-        );
-      } catch (err) {
-        if (active) {
-          toast.error('Failed to load Dashboard', {
-            description: err?.message || 'Unexpected error occurred',
-          });
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    };
+const isAssignmentCompleted = (assignment) =>
+ assignment.is_done === true ||
+ ['completed', 'done'].includes(String(assignment.status || '').toLowerCase());
 
-    loadDashboardData();
-    return () => {
-      active = false;
-    };
-  }, []);
 
-  const stats = useMemo(() => {
-    const activeUsers = (Array.isArray(users) ? users : []).filter(
-      (u) => u && u.is_active !== false && !u.is_sample
-    );
+const parseEnrolledCount = (r) => {
+ const direct = Number(r.students_count);
+ if (!Number.isNaN(direct) && direct > 0) return direct;
+ const rawMatch = String(r.students_raw || '').match(/^(\d+)/);
+ if (rawMatch) {
+   const parsed = Number(rawMatch[1]);
+   if (parsed > 0) return parsed;
+ }
+ const attended = Number(r.students_attended) || 0;
+ const pct = Number(r.attendance_pct) || 0;
+ if (attended > 0 && pct > 0) return Math.round((attended * 100) / pct);
+ return attended;
+};
 
-    const rawTutors = activeUsers.filter(
-      (u) => String(u.role || '').trim().toLowerCase() === 'tutor'
-    );
 
-    const seenTutors = new Set();
-    const tutorList = rawTutors.filter((u) => {
-      const key = u.id
-        ? String(u.id)
-        : normalizeKey(u.email || u.username || u.full_name);
-      if (!key || seenTutors.has(key)) return false;
-      seenTutors.add(key);
-      return true;
-    });
-
-    const totalTutors = tutorList.length;
-    const totalActiveUsers = activeUsers.length;
-
-    const safeFeedback = Array.isArray(feedbackRecords) ? feedbackRecords : [];
-    const totalFeedbackRecords = safeFeedback.length;
-    const ratedFeedback = safeFeedback.filter(
-      (r) =>
-        r.rating !== null &&
-        r.rating !== undefined &&
-        !Number.isNaN(Number(r.rating))
-    );
-    const avgFeedbackPoint =
-      ratedFeedback.length > 0
-        ? Number(
-            (
-              ratedFeedback.reduce((sum, r) => sum + Number(r.rating), 0) /
-              ratedFeedback.length
-            ).toFixed(1)
-          )
-        : 4;
-
-    const safeQc = Array.isArray(qcRecords) ? qcRecords : [];
-    const totalQcRecords = safeQc.length;
-    const now = new Date();
-    const curYear = now.getFullYear();
-    const curMonth = now.getMonth() + 1;
-    const qcThisMonth = safeQc.filter((q) => {
-      if (q.period_year && q.period_month) {
-        return (
-          Number(q.period_year) === curYear &&
-          Number(q.period_month) === curMonth
-        );
-      }
-      if (!q.record_date) return false;
-      const d = new Date(q.record_date);
-      return (
-        !Number.isNaN(d.getTime()) &&
-        d.getFullYear() === curYear &&
-        d.getMonth() + 1 === curMonth
-      );
-    }).length;
-
-    const scoredQc = safeQc.filter(
-      (q) =>
-        q.evaluation_score !== null &&
-        q.evaluation_score !== undefined &&
-        !Number.isNaN(Number(q.evaluation_score))
-    );
-    const qcResultAvg =
-      scoredQc.length > 0
-        ? Number(
-            (
-              scoredQc.reduce((sum, q) => sum + Number(q.evaluation_score), 0) /
-              scoredQc.length
-            ).toFixed(1)
-          )
-        : null;
-
-    const safeMonthly = Array.isArray(monthlyAssignments) ? monthlyAssignments : [];
-    const doneAssignments = safeMonthly.filter(
-      (a) =>
-        a.is_done === true ||
-        ['completed', 'done', 'submitted'].includes(
-          String(a.status || '').toLowerCase().trim()
-        )
-    ).length;
-    const fbPct =
-      safeMonthly.length > 0
-        ? Number(((doneAssignments / safeMonthly.length) * 100).toFixed(1))
-        : 0;
-    const meetPct = 0;
-    const disciplinePct = Number((fbPct * 0.75 + meetPct * 0.25).toFixed(1));
-
-    const safeTasks = Array.isArray(tasks) ? tasks : [];
-    const myTasks = safeTasks.filter(
-      (t) =>
-        (currentUserId && String(t.assigned_to) === String(currentUserId)) ||
-        (currentUserName &&
-          String(t.assigned_to_name || '').toLowerCase() ===
-            String(currentUserName).toLowerCase())
-    );
-    const openTasks = myTasks.filter(
-      (t) => !['completed', 'done'].includes(String(t.status || '').toLowerCase())
-    );
-    const completedTasks = myTasks.filter((t) =>
-      ['completed', 'done'].includes(String(t.status || '').toLowerCase())
-    );
-
-    const sortedMonthly = [...safeMonthly].sort((a, b) =>
-      String(b.created_at || '').localeCompare(String(a.created_at || ''))
-    );
-
-    const activeCoursesCount = (Array.isArray(courses) ? courses : []).filter(
-      (c) => c.is_active !== false
-    ).length;
-    const totalModulesCount = Array.isArray(modules) ? modules.length : 0;
-
-    return {
-      totalTutors,
-      totalActiveUsers,
-      totalFeedbackRecords,
-      avgFeedbackPoint,
-      totalQcRecords,
-      qcThisMonth,
-      qcResultAvg,
-      fbPct,
-      meetPct,
-      disciplinePct,
-      myTasks,
-      openTasks,
-      completedTasks,
-      sortedMonthly,
-      activeCoursesCount,
-      totalModulesCount,
-    };
-  }, [
-    users,
-    feedbackRecords,
-    monthlyAssignments,
-    qcRecords,
-    tasks,
-    courses,
-    modules,
-    currentUserId,
-    currentUserName,
-  ]);
-
-  const handleRescheduleClick = (item) => {
-    toast.info('Reschedule requested', {
-      description: `${item?.class_name || item?.course_name || 'Assignment'} marked for reschedule review.`,
-    });
-  };
-
-  if (loading) {
-    return (
-      <div className="flex justify-center py-20">
-        <Loader2 className="w-7 h-7 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6 pb-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Welcome back, {displayName}
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Link
-          to="/user-list"
-          className="bg-card border border-border rounded-2xl p-5 shadow-xs hover:border-primary/40 transition-colors flex items-start justify-between"
-        >
-          <div>
-            <div className="text-3xl font-bold text-foreground tracking-tight">
-              {stats.totalTutors}
-            </div>
-            <div className="text-xs font-semibold text-foreground mt-1">Total Tutors</div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">
-              {stats.totalActiveUsers} total active users
-            </div>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
-            <Users className="w-5 h-5" />
-          </div>
-        </Link>
-
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-3xl font-bold text-foreground tracking-tight">
-              {stats.disciplinePct}%
-            </div>
-            <div className="text-xs font-semibold text-foreground mt-1">
-              Discipline (75/25)
-            </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">
-              FB: {stats.fbPct}% • Meet: {stats.meetPct}%
-            </div>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-600 flex items-center justify-center shrink-0">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-3xl font-bold text-foreground tracking-tight">
-              {stats.qcResultAvg !== null ? stats.qcResultAvg : '-'}
-            </div>
-            <div className="text-xs font-semibold text-foreground mt-1">QC Result Avg</div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">P1: - • P2: -</div>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
-            <Award className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-3xl font-bold text-foreground tracking-tight">
-              {stats.totalFeedbackRecords}
-            </div>
-            <div className="text-xs font-semibold text-foreground mt-1">
-              Feedback Records
-            </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">
-              Avg Point: {stats.avgFeedbackPoint} / 5
-            </div>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
-            <MessageSquareText className="w-5 h-5" />
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center gap-2 text-sm font-bold text-foreground">
-            <ShieldCheck className="w-4 h-4 text-primary" />
-            <span>QC Analytics</span>
-          </div>
-          <div className="space-y-2.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">This Month</span>
-              <span className="font-bold text-foreground">{stats.qcThisMonth}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Period 1 / Period 2 Avg</span>
-              <span className="font-semibold text-primary">- / -</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Total Records</span>
-              <span className="font-bold text-foreground">{stats.totalQcRecords}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center gap-2 text-sm font-bold text-foreground">
-            <Award className="w-4 h-4 text-amber-500" />
-            <span>Feedback Analytics</span>
-          </div>
-          <div className="space-y-2.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Average Point</span>
-              <span className="font-bold text-amber-600">{stats.avgFeedbackPoint}/5</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Total Records</span>
-              <span className="font-bold text-foreground">
-                {stats.totalFeedbackRecords}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center gap-2 text-sm font-bold text-foreground">
-            <BookOpen className="w-4 h-4 text-primary" />
-            <span>Courses & Modules</span>
-          </div>
-          <div className="space-y-2.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Active Courses</span>
-              <span className="font-bold text-foreground">
-                {stats.activeCoursesCount}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Total Modules</span>
-              <span className="font-bold text-foreground">{stats.totalModulesCount}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        <div className="lg:col-span-5 bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-bold text-foreground">
-              <ClipboardList className="w-4 h-4 text-primary" />
-              <span>My Assigned Tasks</span>
-            </div>
-            <div className="text-xs font-medium">
-              <span className="text-amber-600 font-semibold">
-                {stats.openTasks.length} open
-              </span>{' '}
-              <span className="text-emerald-600 font-semibold ml-1.5">
-                {stats.completedTasks.length} completed
-              </span>
-            </div>
-          </div>
-
-          {stats.myTasks.length === 0 ? (
-            <div className="py-10 text-center text-xs text-muted-foreground">
-              No tasks assigned yet. Tasks assigned by your Team Leader will appear here
-              automatically.
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {stats.myTasks.slice(0, 5).map((task, idx) => (
-                <div
-                  key={task.id || idx}
-                  className="rounded-xl border border-border bg-secondary/30 p-3 flex items-center justify-between gap-2 text-xs"
-                >
-                  <div>
-                    <div className="font-semibold text-foreground">{task.title}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Due: {task.due_date || '-'}
-                    </div>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-full bg-card border border-border font-medium">
-                    {task.status || 'Open'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="lg:col-span-7 bg-card border border-border rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-bold text-foreground">
-              <MessageSquareText className="w-4 h-4 text-primary" />
-              <span>My Monthly Student Feedback</span>
-            </div>
-            <div className="text-xs font-medium">
-              <span className="text-amber-600 font-semibold">
-                {stats.sortedMonthly.filter((i) => !i.is_done).length} to do
-              </span>{' '}
-              <span className="text-emerald-600 font-semibold ml-1.5">
-                {stats.sortedMonthly.filter((i) => i.is_done).length} done
-              </span>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {stats.sortedMonthly.slice(0, 2).map((item, idx) => {
-              const isDone =
-                item.is_done === true ||
-                ['completed', 'done', 'submitted'].includes(
-                  String(item.status || '').toLowerCase().trim()
-                );
-
-              return (
-                <div
-                  key={item.id || idx}
-                  className="rounded-xl border border-border bg-card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold text-foreground">
-                        {item.class_name || item.student_name || 'Class Session'}
-                      </span>
-                      {item.month_label && (
-                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet-50 text-violet-700 border border-violet-200">
-                          {item.month_label}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                      <span>
-                        {item.course_name || 'Course'} •{' '}
-                        {item.class_name || item.student_name || ''}
-                      </span>
-                      <span>•</span>
-                      <span>
-                        Lesson {item.lesson_number || 4} Monthly Report
-                        {item.deadline ? ` | Deadline: ${item.deadline}` : ''}
-                      </span>
-                    </div>
-
-                    {item.period_label && (
-                      <div className="text-[11px] text-muted-foreground">
-                        {item.period_label}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {isDone ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Done (1/1)
-                      </span>
-                    ) : (
-                      <>
-                        <Button
-                          type="button"
-                          size="sm"
-                          asChild
-                          className="h-8 text-xs font-semibold gap-1.5"
-                        >
-                          <Link to="/feedback/monthly">
-                            <Play className="w-3 h-3 fill-current" />
-                            Process
-                          </Link>
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleRescheduleClick(item)}
-                          className="h-8 text-xs font-medium gap-1.5"
-                        >
-                          <CalendarClock className="w-3.5 h-3.5" />
-                          Reschedule
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function StatCard({ label, value, subtext, icon: Icon, color, glow }) {
+ return (
+   <div className={`bg-card border border-border rounded-2xl p-6 flex items-center gap-5 ${glow || ''}`}>
+     <div className={`w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 ${color}`}>
+       {Icon && <Icon className="w-6 h-6 text-white" />}
+     </div>
+     <div className="min-w-0">
+       <div className="text-2xl font-bold text-foreground">{value}</div>
+       <div className="text-sm text-muted-foreground mt-0.5 truncate">{label}</div>
+       {subtext && <div className="text-[11px] text-muted-foreground mt-0.5 truncate">{subtext}</div>}
+     </div>
+   </div>
+ );
 }
 
-export default Dashboard;
+
+export default function Dashboard() {
+ const { currentUser, hasPermission } = useAppAuth();
+ const [stats, setStats] = useState({});
+ const [adminKpi, setAdminKpi] = useState({
+   disciplineAvg: null,
+   fbAvg: null,
+   meetAvg: null,
+   qcMonthAvg: null,
+   qcP1Avg: null,
+   qcP2Avg: null,
+ });
+ const [myMetric, setMyMetric] = useState({
+   classesConducted: 0,
+   attendancePct: null,
+   totalAttendedStudents: 0,
+   totalEnrolledStudents: 0,
+   disciplinePct: null,
+   qualityScore: null,
+   complaint: '-',
+   status: 'No result',
+ });
+ const [loading, setLoading] = useState(true);
+
+
+ const isAdmin = currentUser?.role && !['Tutor'].includes(currentUser.role);
+ const isTutor = currentUser?.role === 'Tutor';
+
+
+ useEffect(() => {
+   async function load() {
+     const now = new Date();
+     const curMonth = now.getMonth() + 1;
+     const curYear = now.getFullYear();
+     const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
+     const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+
+
+     const [users, qcRecs, fbRecs, courses, modules] = await Promise.all([
+       db.entities.CustomUser.list(),
+       hasPermission('qc_records') ? db.entities.QCRecord.list() : [],
+       hasPermission('student_feedback') ? db.entities.FeedbackRecord.list() : [],
+       hasPermission('category_courses') ? db.entities.CourseCategory.list() : [],
+       hasPermission('category_module') ? db.entities.ModuleCategory.list() : [],
+     ]);
+
+
+     const tutors = users.filter((u) => u.role === 'Tutor').length;
+     const statsData = {
+       totalUsers: users.length,
+       tutors,
+       admins: users.length - tutors,
+       roleCounts: {
+         headOfTutor: users.filter((u) => u.role === 'Head of Tutor').length,
+         teamLeader: users.filter((u) => u.role === 'Team Leader').length,
+         qcTeam: users.filter((u) => u.role === 'QC Team').length,
+         feedbackTeam: users.filter((u) => u.role === 'Feedback Team').length,
+       },
+     };
+
+
+     if (hasPermission('qc_records')) {
+       statsData.qcRecords = qcRecs.length;
+       statsData.qcThisMonth = qcRecs.filter(
+         (q) => q.period_month === curMonth && q.period_year === curYear
+       ).length;
+       statsData.avgQcScore =
+         qcRecs.length > 0
+           ? Math.floor(qcRecs.reduce((sum, q) => sum + (q.evaluation_score || 0), 0) / qcRecs.length)
+           : 0;
+     }
+
+
+     if (hasPermission('student_feedback')) {
+       statsData.feedbackRecords = fbRecs.length;
+       statsData.avgFeedbackPoint =
+         fbRecs.length > 0
+           ? Math.floor(fbRecs.reduce((sum, f) => sum + (f.point || 0), 0) / fbRecs.length)
+           : 0;
+     }
+
+
+     if (hasPermission('category_courses')) {
+       statsData.totalCourses = courses.filter((c) => c.is_active !== false).length;
+     }
+
+
+     if (hasPermission('category_module')) {
+       statsData.totalModules = modules.length;
+     }
+
+
+     if (isTutor) {
+       statsData.myQcRecords = qcRecs.filter((q) => q.tutor_id === currentUser.id).length;
+       statsData.myFeedbackRecords = fbRecs.filter((f) => f.tutor_id === currentUser.id).length;
+     }
+
+
+     // 1. Query khusus Admin / Team Leader
+     if (isAdmin) {
+       try {
+         const [{ data: qcData }, { data: fbAssignData }, { data: meetData }, { data: attData }] =
+           await Promise.all([
+             supabase
+               .from('QCRecord')
+               .select('period_month, period_year, evaluation_score, evaluation_date, created_at, period, qc_period, is_sample'),
+             supabase.from('WeeklyFeedbackAssignment').select('*'),
+             supabase.from('TutorMeeting').select('id, meeting_date'),
+             supabase.from('TutorMeetingAttendance').select('meeting_id, status'),
+           ]);
+
+
+         const curAssignments = (fbAssignData || []).filter((a) => {
+           if (a.is_sample) return false;
+           if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
+           if (!isLessonFourMultiple(a)) return false;
+           if (a.week_start_date) {
+             const [ay, am] = a.week_start_date.split('-');
+             return Number(ay) === curYear && Number(am) === curMonth;
+           }
+           return true;
+         });
+
+
+         const allFbPct =
+           curAssignments.length > 0
+             ? Number(
+                 ((curAssignments.filter(isAssignmentCompleted).length / curAssignments.length) * 100).toFixed(1)
+               )
+             : null;
+
+
+         const curMeetingIds = new Set(
+           (meetData || [])
+             .filter((m) => {
+               if (!m.meeting_date) return false;
+               const [y, mStr] = m.meeting_date.split('-');
+               return Number(y) === curYear && Number(mStr) === curMonth;
+             })
+             .map((m) => m.id)
+         );
+         const curMeetAtts = (attData || []).filter((att) => curMeetingIds.has(att.meeting_id));
+         let allMeetPct = null;
+         if (curMeetAtts.length > 0) {
+           const p = curMeetAtts.filter((r) => normalizeAttendanceStatus(r.status) === 'Present').length;
+           const e = curMeetAtts.filter((r) => normalizeAttendanceStatus(r.status) === 'Excused').length;
+           allMeetPct = Number((((p * 1 + e * 0.75) / curMeetAtts.length) * 100).toFixed(1));
+         }
+
+
+         let allDisciplinePct = null;
+         if (allFbPct !== null && allMeetPct !== null) {
+           allDisciplinePct = Number((allFbPct * FEEDBACK_WEIGHT + allMeetPct * MEETING_WEIGHT).toFixed(1));
+         } else if (allFbPct !== null) {
+           allDisciplinePct = allFbPct;
+         } else if (allMeetPct !== null) {
+           allDisciplinePct = allMeetPct;
+         }
+
+
+         const curMonthQcs = (qcData || []).filter(
+           (q) =>
+             !q.is_sample &&
+             q.evaluation_score !== null &&
+             q.evaluation_score !== undefined &&
+             Number(q.period_month) === curMonth &&
+             Number(q.period_year) === curYear
+         );
+         const p1Qcs = curMonthQcs.filter((q) => {
+           const p = String(q.period || q.qc_period || '').toLowerCase();
+           if (p.includes('1') && !p.includes('2')) return true;
+           const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 1);
+           return day <= 15;
+         });
+         const p2Qcs = curMonthQcs.filter((q) => {
+           const p = String(q.period || q.qc_period || '').toLowerCase();
+           if (p.includes('2')) return true;
+           const day = Number(String(q.evaluation_date || q.created_at || '').split('-')[2] || 16);
+           return day > 15;
+         });
+
+
+         const avgScore = (arr) =>
+           arr.length > 0
+             ? Number((arr.reduce((s, x) => s + Number(x.evaluation_score || 0), 0) / arr.length).toFixed(1))
+             : null;
+
+
+         setAdminKpi({
+           disciplineAvg: allDisciplinePct,
+           fbAvg: allFbPct,
+           meetAvg: allMeetPct,
+           qcMonthAvg: avgScore(curMonthQcs),
+           qcP1Avg: avgScore(p1Qcs),
+           qcP2Avg: avgScore(p2Qcs),
+         });
+       } catch (err) {
+         console.error('Error loading admin dashboard KPIs:', err);
+       }
+     }
+
+
+     // 2. Query khusus Tutor (tampilan tetap seperti semula)
+     if (isTutor) {
+       try {
+         const tName = currentUser.full_name || currentUser.username || '';
+         const tId = currentUser.id;
+
+
+         const [{ data: schedData }, { data: qcData }, { data: fbAssignData }, { data: meetData }, { data: attData }] =
+           await Promise.all([
+             supabase
+               .from('BoScheduleRecord')
+               .select('lesson_teacher, lesson_month, lesson_year, attendance_pct, students_count, students_raw, students_attended, is_conducted, is_test_group')
+               .eq('lesson_month', curMonth)
+               .eq('lesson_year', curYear),
+             supabase
+               .from('QCRecord')
+               .select('tutor_id, tutor_name, period_month, period_year, evaluation_score, is_sample'),
+             supabase.from('WeeklyFeedbackAssignment').select('*'),
+             supabase.from('TutorMeeting').select('id, meeting_date'),
+             supabase.from('TutorMeetingAttendance').select('meeting_id, tutor_id, tutor_name, status'),
+           ]);
+
+
+         const myConducted = (schedData || []).filter(
+           (r) => !r.is_test_group && r.is_conducted && isSameTutor(r.lesson_teacher, tName)
+         );
+         const classesConducted = myConducted.length;
+         const totalAttendedStudents = myConducted.reduce(
+           (s, r) => s + (Number(r.students_attended) || 0),
+           0
+         );
+         const totalEnrolledStudents = myConducted.reduce(
+           (s, r) => s + parseEnrolledCount(r),
+           0
+         );
+         const attendancePct =
+           classesConducted > 0 && totalEnrolledStudents > 0
+             ? Number(((totalAttendedStudents / totalEnrolledStudents) * 100).toFixed(2))
+             : null;
+
+
+         const myAssignments = (fbAssignData || []).filter((a) => {
+           if (a.is_sample) return false;
+           if (String(a.status || '').toLowerCase() === 'rescheduled') return false;
+           const matchUser = (a.tutor_id && a.tutor_id === tId) || isSameTutor(a.tutor_name, tName);
+           if (!matchUser || !isLessonFourMultiple(a)) return false;
+           if (a.week_start_date) {
+             const [ay, am] = a.week_start_date.split('-');
+             return Number(ay) === curYear && Number(am) === curMonth;
+           }
+           return true;
+         });
+         const fbTarget = myAssignments.length;
+         const fbSubmitted = myAssignments.filter(isAssignmentCompleted).length;
+         const fbPct = fbTarget > 0 ? Math.min(100, (fbSubmitted / fbTarget) * 100) : null;
+
+
+         const validMeetingIds = new Set(
+           (meetData || [])
+             .filter((m) => {
+               if (!m.meeting_date) return false;
+               const [y, mStr] = m.meeting_date.split('-');
+               return Number(y) === curYear && Number(mStr) === curMonth;
+             })
+             .map((m) => m.id)
+         );
+         const myMeetRecs = (attData || []).filter(
+           (att) =>
+             validMeetingIds.has(att.meeting_id) &&
+             (att.tutor_id === tId || isSameTutor(att.tutor_name, tName))
+         );
+         let meetPct = null;
+         if (myMeetRecs.length > 0) {
+           const present = myMeetRecs.filter(
+             (r) => normalizeAttendanceStatus(r.status) === 'Present'
+           ).length;
+           const excused = myMeetRecs.filter(
+             (r) => normalizeAttendanceStatus(r.status) === 'Excused'
+           ).length;
+           meetPct = ((present * 1 + excused * 0.75) / myMeetRecs.length) * 100;
+         }
+
+
+         let disciplinePct = null;
+         if (fbPct !== null && meetPct !== null) {
+           disciplinePct = Number((fbPct * FEEDBACK_WEIGHT + meetPct * MEETING_WEIGHT).toFixed(2));
+         } else if (fbPct !== null) {
+           disciplinePct = Number(fbPct.toFixed(2));
+         } else if (meetPct !== null) {
+           disciplinePct = Number(meetPct.toFixed(2));
+         }
+
+
+         const myQcs = (qcData || []).filter((q) => {
+           if (q.is_sample || q.evaluation_score === null || q.evaluation_score === undefined) return false;
+           const matchUser = (q.tutor_id && q.tutor_id === tId) || isSameTutor(q.tutor_name, tName);
+           return matchUser && Number(q.period_month) === prevMonth && Number(q.period_year) === prevYear;
+         });
+         const qualityScore =
+           myQcs.length > 0
+             ? Math.round(myQcs.reduce((s, q) => s + Number(q.evaluation_score || 0), 0) / myQcs.length)
+             : null;
+
+
+         const hasAnyMetric =
+           attendancePct !== null || disciplinePct !== null || qualityScore !== null;
+         const composite = hasAnyMetric
+           ? ((attendancePct ?? 0) + (disciplinePct ?? 0) + (qualityScore ?? 0)) / 3
+           : null;
+
+
+         let status = 'No result';
+         if (composite !== null) {
+           if (composite >= 90) status = 'High Performer';
+           else if (composite >= 80) status = 'Stable Performer';
+           else if (composite >= 70) status = 'Need Improvement';
+           else status = 'Low Performance';
+         }
+
+
+         setMyMetric({
+           classesConducted,
+           attendancePct,
+           totalAttendedStudents,
+           totalEnrolledStudents,
+           disciplinePct,
+           qualityScore,
+           complaint: '-',
+           status,
+         });
+       } catch (err) {
+         console.error('Error loading tutor dashboard metric:', err);
+       }
+     }
+
+
+     setStats(statsData);
+     setLoading(false);
+   }
+   load();
+ }, [currentUser, isAdmin, isTutor]);
+
+
+ const hasQcPermission = hasPermission('qc_records');
+ const hasFeedbackPermission = hasPermission('student_feedback');
+
+
+ return (
+   <div className="space-y-8">
+     <div>
+       <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
+       <p className="text-muted-foreground mt-1">Welcome back, {currentUser?.full_name || 'User'}</p>
+     </div>
+
+
+     {/* ==================== VIEW 1: ADMIN / TEAM LEADER ==================== */}
+     {isAdmin && (
+       <>
+         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
+           <StatCard
+             label="Total Tutors"
+             value={loading ? '...' : stats.tutors || 0}
+             subtext={`${stats.totalUsers || 0} total active users`}
+             icon={Users}
+             color="bg-primary"
+             glow="glow-purple"
+           />
+           <StatCard
+             label="Discipline (75/25)"
+             value={
+               loading
+                 ? '...'
+                 : adminKpi.disciplineAvg !== null
+                 ? `${adminKpi.disciplineAvg}%`
+                 : '-'
+             }
+             subtext={`FB: ${adminKpi.fbAvg ?? '-'}% · Meet: ${adminKpi.meetAvg ?? '-'}%`}
+             icon={ShieldCheck}
+             color="bg-violet-600"
+           />
+           <StatCard
+             label="QC Result Avg"
+             value={loading ? '...' : adminKpi.qcMonthAvg ?? '-'}
+             subtext={`P1: ${adminKpi.qcP1Avg ?? '-'} · P2: ${adminKpi.qcP2Avg ?? '-'}`}
+             icon={Star}
+             color="bg-amber-500"
+           />
+           {hasFeedbackPermission ? (
+             <StatCard
+               label="Feedback Records"
+               value={loading ? '...' : stats.feedbackRecords || 0}
+               subtext={`Avg Point: ${stats.avgFeedbackPoint || 0} / 5`}
+               icon={MessageSquare}
+               color="bg-chart-4"
+             />
+           ) : (
+             <StatCard
+               label="QC Records"
+               value={loading ? '...' : stats.qcRecords || 0}
+               subtext={`${stats.qcThisMonth || 0} this month`}
+               icon={CheckSquare}
+               color="bg-chart-3"
+             />
+           )}
+         </div>
+
+
+         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+           {hasQcPermission && (
+             <div className="bg-card border border-border rounded-2xl p-6">
+               <div className="flex items-center gap-2 mb-4">
+                 <Award className="w-5 h-5 text-chart-3" />
+                 <h2 className="font-semibold text-foreground">QC Analytics</h2>
+               </div>
+               <div className="space-y-4">
+                 <div className="flex justify-between items-center">
+                   <span className="text-sm text-muted-foreground">This Month</span>
+                   <span className="text-sm font-bold text-foreground">
+                     {loading ? '...' : stats.qcThisMonth || 0}
+                   </span>
+                 </div>
+                 <div className="flex justify-between items-center">
+                   <span className="text-sm text-muted-foreground">Period 1 / Period 2 Avg</span>
+                   <span className="text-sm font-bold text-chart-3">
+                     {loading ? '...' : `${adminKpi.qcP1Avg ?? '-'} / ${adminKpi.qcP2Avg ?? '-'}`}
+                   </span>
+                 </div>
+                 <div className="flex justify-between items-center">
+                   <span className="text-sm text-muted-foreground">Total Records</span>
+                   <span className="text-sm font-bold text-foreground">
+                     {loading ? '...' : stats.qcRecords || 0}
+                   </span>
+                 </div>
+               </div>
+             </div>
+           )}
+
+
+           {hasFeedbackPermission && (
+             <div className="bg-card border border-border rounded-2xl p-6">
+               <div className="flex items-center gap-2 mb-4">
+                 <Star className="w-5 h-5 text-chart-4" />
+                 <h2 className="font-semibold text-foreground">Feedback Analytics</h2>
+               </div>
+               <div className="space-y-4">
+                 <div className="flex justify-between items-center">
+                   <span className="text-sm text-muted-foreground">Average Point</span>
+                   <span className="text-sm font-bold text-chart-4">
+                     {loading ? '...' : `${stats.avgFeedbackPoint || 0} / 5`}
+                   </span>
+                 </div>
+                 <div className="flex justify-between items-center">
+                   <span className="text-sm text-muted-foreground">Total Records</span>
+                   <span className="text-sm font-bold text-foreground">
+                     {loading ? '...' : stats.feedbackRecords || 0}
+                   </span>
+                 </div>
+               </div>
+             </div>
+           )}
+
+
+           {(hasPermission('category_courses') || hasPermission('category_module')) && (
+             <div className="bg-card border border-border rounded-2xl p-6">
+               <div className="flex items-center gap-2 mb-4">
+                 <FileText className="w-5 h-5 text-primary" />
+                 <h2 className="font-semibold text-foreground">Courses &amp; Modules</h2>
+               </div>
+               <div className="space-y-4">
+                 {hasPermission('category_courses') && (
+                   <div className="flex justify-between items-center">
+                     <span className="text-sm text-muted-foreground">Active Courses</span>
+                     <span className="text-sm font-bold text-foreground">
+                       {loading ? '...' : stats.totalCourses || 0}
+                     </span>
+                   </div>
+                 )}
+                 {hasPermission('category_module') && (
+                   <div className="flex justify-between items-center">
+                     <span className="text-sm text-muted-foreground">Total Modules</span>
+                     <span className="text-sm font-bold text-foreground">
+                       {loading ? '...' : stats.totalModules || 0}
+                     </span>
+                   </div>
+                 )}
+               </div>
+             </div>
+           )}
+         </div>
+       </>
+     )}
+
+
+     {/* ==================== VIEW 2: TUTOR (TIDAK ADA PERUBAHAN) ==================== */}
+     {isTutor && (
+       <div className="space-y-5">
+         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+           {hasFeedbackPermission && (
+             <StatCard
+               label="My Feedback"
+               value={loading ? '...' : stats.myFeedbackRecords || 0}
+               icon={MessageSquare}
+               color="bg-chart-4"
+             />
+           )}
+           <StatCard
+             label="My Courses"
+             value={loading ? '...' : currentUser?.taught_courses?.length || 0}
+             icon={BookOpen}
+             color="bg-primary"
+           />
+           <StatCard
+             label="Classes Conducted"
+             value={loading ? '...' : myMetric.classesConducted}
+             icon={CalendarCheck}
+             color="bg-emerald-600"
+           />
+           <StatCard
+             label="My Attendance"
+             value={
+               loading
+                 ? '...'
+                 : myMetric.attendancePct !== null
+                 ? `${myMetric.attendancePct.toFixed(1)}%`
+                 : '-'
+             }
+             icon={TrendingUp}
+             color="bg-indigo-600"
+           />
+         </div>
+
+
+         <div className="bg-card border border-border rounded-2xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+           <div className="space-y-3 flex-1">
+             <div className="flex flex-wrap items-center gap-2.5">
+               <h2 className="font-semibold text-foreground text-base flex items-center gap-2">
+                 <Award className="w-5 h-5 text-primary" />
+                 My Tutor Metric Summary
+               </h2>
+               <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-secondary text-muted-foreground font-medium">
+                 {new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })} • Read-Only
+               </span>
+             </div>
+
+
+             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-1">
+               <div>
+                 <div className="text-xs text-muted-foreground">Classes Conducted</div>
+                 <div className="text-lg font-bold text-foreground mt-0.5">
+                   {loading ? '...' : myMetric.classesConducted}
+                 </div>
+               </div>
+               <div>
+                 <div className="text-xs text-muted-foreground">Attendance</div>
+                 <div className="text-lg font-bold text-foreground mt-0.5">
+                   {loading
+                     ? '...'
+                     : myMetric.attendancePct !== null
+                     ? `${myMetric.attendancePct.toFixed(2)}%`
+                     : '-'}
+                 </div>
+                 {!loading && myMetric.attendancePct !== null && (
+                   <div className="text-[11px] text-muted-foreground">
+                     {myMetric.totalAttendedStudents}/{myMetric.totalEnrolledStudents} kids
+                   </div>
+                 )}
+               </div>
+               <div>
+                 <div className="text-xs text-muted-foreground">Discipline</div>
+                 <div className="text-lg font-bold text-foreground mt-0.5">
+                   {loading
+                     ? '...'
+                     : myMetric.disciplinePct !== null
+                     ? `${myMetric.disciplinePct.toFixed(2)}%`
+                     : '-'}
+                 </div>
+               </div>
+               <div>
+                 <div className="text-xs text-muted-foreground">Quality (QC)</div>
+                 <div className="text-lg font-bold text-foreground mt-0.5">
+                   {loading ? '...' : myMetric.qualityScore !== null ? myMetric.qualityScore : '-'}
+                 </div>
+               </div>
+               <div>
+                 <div className="text-xs text-muted-foreground">Complaint</div>
+                 <div className="text-lg font-bold text-foreground mt-0.5">
+                   {loading ? '...' : myMetric.complaint}
+                 </div>
+               </div>
+             </div>
+           </div>
+
+
+           <div className="flex flex-row lg:flex-col items-center lg:items-end justify-between gap-3 border-t lg:border-t-0 pt-3 lg:pt-0 border-border">
+             {!loading && (
+               <span
+                 className={`inline-flex items-center whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-semibold border ${
+                   myMetric.status === 'High Performer'
+                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                     : myMetric.status === 'Stable Performer'
+                     ? 'bg-blue-50 text-blue-700 border-blue-200'
+                     : myMetric.status === 'Need Improvement'
+                     ? 'bg-amber-50 text-amber-700 border-amber-200'
+                     : myMetric.status === 'Low Performance'
+                     ? 'bg-rose-50 text-rose-700 border-rose-200'
+                     : 'bg-secondary text-muted-foreground border-border'
+                 }`}
+               >
+                 {myMetric.status}
+               </span>
+             )}
+
+
+             <Link
+               to="/my-metric"
+               className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline whitespace-nowrap"
+             >
+               View Full Details <ArrowRight className="w-3.5 h-3.5" />
+             </Link>
+           </div>
+         </div>
+       </div>
+     )}
+
+
+     {['Tutor', 'Team Leader'].includes(currentUser?.role) && (
+       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+         <TutorTasksPanel />
+         <MyWeeklyFeedbackPanel />
+       </div>
+     )}
+
+
+     {['Tutor', 'Team Leader'].includes(currentUser?.role) && <QCSubmissionPanel />}
+
+
+     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+       {isAdmin && (
+         <div className="bg-card border border-border rounded-2xl p-6">
+           <div className="flex items-center gap-2 mb-4">
+             <TrendingUp className="w-5 h-5 text-primary" />
+             <h2 className="font-semibold text-foreground">Team Overview</h2>
+           </div>
+           <div className="space-y-3">
+             <div className="flex justify-between items-center">
+               <span className="text-sm text-muted-foreground">Head of Tutor</span>
+               <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
+                 {loading ? '...' : stats.roleCounts?.headOfTutor || 0}
+               </span>
+             </div>
+             <div className="flex justify-between items-center">
+               <span className="text-sm text-muted-foreground">Team Leader</span>
+               <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
+                 {loading ? '...' : stats.roleCounts?.teamLeader || 0}
+               </span>
+             </div>
+             <div className="flex justify-between items-center">
+               <span className="text-sm text-muted-foreground">QC Team</span>
+               <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
+                 {loading ? '...' : stats.roleCounts?.qcTeam || 0}
+               </span>
+             </div>
+             <div className="flex justify-between items-center">
+               <span className="text-sm text-muted-foreground">Feedback Team</span>
+               <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
+                 {loading ? '...' : stats.roleCounts?.feedbackTeam || 0}
+               </span>
+             </div>
+             <div className="flex justify-between items-center">
+               <span className="text-sm text-muted-foreground">Tutor</span>
+               <span className="text-sm font-medium text-foreground px-2 py-0.5 bg-secondary rounded-lg">
+                 {loading ? '...' : stats.tutors || 0}
+               </span>
+             </div>
+           </div>
+         </div>
+       )}
+
+
+       <div className="bg-card border border-border rounded-2xl p-6">
+         <div className="flex items-center gap-2 mb-4">
+           <Calendar className="w-5 h-5 text-chart-4" />
+           <h2 className="font-semibold text-foreground">Current Period</h2>
+         </div>
+         <div className="space-y-3">
+           <div className="flex justify-between items-center">
+             <span className="text-sm text-muted-foreground">Month</span>
+             <span className="text-sm font-medium text-foreground">
+               {new Date().toLocaleString('en-US', { month: 'long' })}
+             </span>
+           </div>
+           <div className="flex justify-between items-center">
+             <span className="text-sm text-muted-foreground">Year</span>
+             <span className="text-sm font-medium text-foreground">{new Date().getFullYear()}</span>
+           </div>
+           <div className="flex justify-between items-center">
+             <span className="text-sm text-muted-foreground">Period</span>
+             <span className="text-sm font-medium text-foreground">
+               {new Date().getDate() <= 15 ? 'Period 1 (1–15)' : 'Period 2 (16–31)'}
+             </span>
+           </div>
+         </div>
+       </div>
+     </div>
+   </div>
+ );
+}
+
