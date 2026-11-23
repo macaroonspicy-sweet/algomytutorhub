@@ -36,6 +36,12 @@ const normalizeName = (name) =>
    .trim();
 
 
+const normalizeTutorKey = (u) =>
+ String(u?.email || u?.username || u?.full_name || u?.id || '')
+   .toLowerCase()
+   .trim();
+
+
 const isSameTutor = (a, b) => {
  if (!a || !b) return false;
  const cleanA = a.toLowerCase().trim();
@@ -142,26 +148,51 @@ export default function Dashboard() {
      const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
 
-
-     const [users, qcRecs, fbRecs, courses, modules] = await Promise.all([
-       db.entities.CustomUser.list(),
-       hasPermission('qc_records') ? db.entities.QCRecord.list() : [],
-       hasPermission('student_feedback') ? db.entities.FeedbackRecord.list() : [],
+     const [
+       { data: supaUsers, error: usersErr },
+       { data: supaQc, error: qcErr },
+       { data: supaFb, error: fbErr },
+       courses,
+       modules,
+     ] = await Promise.all([
+       supabase.from('CustomUser').select('*'),
+       hasPermission('qc_records') ? supabase.from('QCRecord').select('*') : Promise.resolve({ data: [] }),
+       hasPermission('student_feedback') ? supabase.from('FeedbackRecord').select('*') : Promise.resolve({ data: [] }),
        hasPermission('category_courses') ? db.entities.CourseCategory.list() : [],
        hasPermission('category_module') ? db.entities.ModuleCategory.list() : [],
      ]);
 
+     const rawUsers = !usersErr && Array.isArray(supaUsers) ? supaUsers : await db.entities.CustomUser.list();
+     const qcRecs = (!qcErr && Array.isArray(supaQc) ? supaQc : await db.entities.QCRecord.list()).filter(
+       (q) => !q.is_sample
+     );
+     const fbRecs = (!fbErr && Array.isArray(supaFb) ? supaFb : await db.entities.FeedbackRecord.list()).filter(
+       (f) => !f.is_sample
+     );
 
-     const tutors = users.filter((u) => u.role === 'Tutor').length;
+     const activeUsers = (Array.isArray(rawUsers) ? rawUsers : []).filter(
+       (u) => u && u.is_active !== false && !u.is_sample
+     );
+
+     const seenTutors = new Set();
+     const uniqueTutors = activeUsers.filter((u) => {
+       if (String(u.role || '').trim().toLowerCase() !== 'tutor') return false;
+       const key = normalizeTutorKey(u);
+       if (!key || seenTutors.has(key)) return false;
+       seenTutors.add(key);
+       return true;
+     });
+
+     const tutors = uniqueTutors.length;
      const statsData = {
-       totalUsers: users.length,
+       totalUsers: activeUsers.length,
        tutors,
-       admins: users.length - tutors,
+       admins: Math.max(0, activeUsers.length - tutors),
        roleCounts: {
-         headOfTutor: users.filter((u) => u.role === 'Head of Tutor').length,
-         teamLeader: users.filter((u) => u.role === 'Team Leader').length,
-         qcTeam: users.filter((u) => u.role === 'QC Team').length,
-         feedbackTeam: users.filter((u) => u.role === 'Feedback Team').length,
+         headOfTutor: activeUsers.filter((u) => u.role === 'Head of Tutor').length,
+         teamLeader: activeUsers.filter((u) => u.role === 'Team Leader').length,
+         qcTeam: activeUsers.filter((u) => u.role === 'QC Team').length,
+         feedbackTeam: activeUsers.filter((u) => u.role === 'Feedback Team').length,
        },
      };
 
@@ -169,20 +200,31 @@ export default function Dashboard() {
      if (hasPermission('qc_records')) {
        statsData.qcRecords = qcRecs.length;
        statsData.qcThisMonth = qcRecs.filter(
-         (q) => q.period_month === curMonth && q.period_year === curYear
+         (q) => Number(q.period_month) === curMonth && Number(q.period_year) === curYear
        ).length;
+       const validQcScores = qcRecs.filter(
+         (q) => q.evaluation_score !== null && q.evaluation_score !== undefined && !Number.isNaN(Number(q.evaluation_score))
+       );
        statsData.avgQcScore =
-         qcRecs.length > 0
-           ? Math.floor(qcRecs.reduce((sum, q) => sum + (q.evaluation_score || 0), 0) / qcRecs.length)
+         validQcScores.length > 0
+           ? Number(
+               (validQcScores.reduce((sum, q) => sum + Number(q.evaluation_score), 0) / validQcScores.length).toFixed(1)
+             )
            : 0;
      }
 
 
      if (hasPermission('student_feedback')) {
        statsData.feedbackRecords = fbRecs.length;
+       const ratedFb = fbRecs.filter((f) => {
+         const val = f.point ?? f.rating;
+         return val !== null && val !== undefined && !Number.isNaN(Number(val));
+       });
        statsData.avgFeedbackPoint =
-         fbRecs.length > 0
-           ? Math.floor(fbRecs.reduce((sum, f) => sum + (f.point || 0), 0) / fbRecs.length)
+         ratedFb.length > 0
+           ? Number(
+               (ratedFb.reduce((sum, f) => sum + Number(f.point ?? f.rating), 0) / ratedFb.length).toFixed(1)
+             )
            : 0;
      }
 
@@ -197,7 +239,7 @@ export default function Dashboard() {
      }
 
 
-     if (isTutor) {
+     if (isTutor && currentUser) {
        statsData.myQcRecords = qcRecs.filter((q) => q.tutor_id === currentUser.id).length;
        statsData.myFeedbackRecords = fbRecs.filter((f) => f.tutor_id === currentUser.id).length;
      }
@@ -308,7 +350,7 @@ export default function Dashboard() {
 
 
      // 2. Query khusus Tutor (tampilan tetap seperti semula)
-     if (isTutor) {
+     if (isTutor && currentUser) {
        try {
          const tName = currentUser.full_name || currentUser.username || '';
          const tId = currentUser.id;
@@ -814,4 +856,3 @@ export default function Dashboard() {
    </div>
  );
 }
-
