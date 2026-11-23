@@ -251,8 +251,9 @@ export default function TutorDiscipline() {
             (r) => normalizeAttendanceStatus(r.status) === 'Excused'
           ).length;
           const weightedScore = presentCount * 1 + excusedCount * 0.75;
+          const formattedScore = Number(weightedScore.toFixed(2));
           meetingPct = Math.round((weightedScore / tutorMeetingRecords.length) * 100);
-          meetingSummaryText = `${meetingPct}% (${presentCount}/${tutorMeetingRecords.length})`;
+          meetingSummaryText = `${meetingPct}% (${formattedScore}/${tutorMeetingRecords.length})`;
         }
 
         // 4. Overall Discipline % & Status
